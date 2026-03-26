@@ -111,8 +111,10 @@ impl SandCastle {
     }
 
     /// Create a retained sandbox for multi-turn execution.
+    ///
+    /// Note: each call to `sandbox.execute()` is tracked in `runtime.metrics()`.
     pub fn create_sandbox(&self) -> Result<Sandbox> {
-        Sandbox::new(&self.engine, &self.module, self.linker.clone())
+        Sandbox::new_with_metrics(&self.engine, &self.module, self.linker.clone(), self.metrics.clone())
     }
 
     /// Create a persistent sandbox that preserves JS global state across
@@ -133,14 +135,16 @@ impl SandCastle {
         limits: Limits,
         capabilities: Arc<CapabilityRegistry>,
     ) -> Result<PersistentSandbox> {
-        PersistentSandbox::new(
+        let mut ps = PersistentSandbox::new(
             &self.engine,
             &self.module,
             &self.linker,
             limits,
             capabilities,
         )
-        .await
+        .await?;
+        ps.set_metrics(self.metrics.clone());
+        Ok(ps)
     }
 
     /// Dispatch to a pre-registered script by name.

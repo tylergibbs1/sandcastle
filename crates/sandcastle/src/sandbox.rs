@@ -183,6 +183,7 @@ pub struct Sandbox {
     engine: Engine,
     module: Module,
     linker: Arc<Linker<SandboxState>>,
+    metrics: Option<Arc<crate::pool::PoolMetrics>>,
 }
 
 impl Sandbox {
@@ -195,6 +196,21 @@ impl Sandbox {
             engine: engine.clone(),
             module: module.clone(),
             linker,
+            metrics: None,
+        })
+    }
+
+    pub(crate) fn new_with_metrics(
+        engine: &Engine,
+        module: &Module,
+        linker: Arc<Linker<SandboxState>>,
+        metrics: Arc<crate::pool::PoolMetrics>,
+    ) -> Result<Self> {
+        Ok(Self {
+            engine: engine.clone(),
+            module: module.clone(),
+            linker,
+            metrics: Some(metrics),
         })
     }
 
@@ -216,6 +232,7 @@ impl Sandbox {
 
     /// Execute code in this sandbox.
     pub async fn execute(&self, request: ExecutionRequest) -> Result<ExecutionResult> {
+        let _metrics_guard = self.metrics.as_ref().map(|m| m.execution_started());
         let fuel_limit = request.limits.fuel;
         let memory_limit = (request.limits.memory_mb as u64) * 1024 * 1024;
         let timeout = request.limits.timeout;
@@ -848,6 +865,7 @@ pub struct PersistentSandbox {
     engine: Engine,
     fuel_per_turn: u64,
     memory_limit: u64,
+    metrics: Option<Arc<crate::pool::PoolMetrics>>,
 }
 
 impl PersistentSandbox {
@@ -944,7 +962,13 @@ impl PersistentSandbox {
             engine: engine.clone(),
             fuel_per_turn,
             memory_limit,
+            metrics: None,
         })
+    }
+
+    /// Set metrics tracking (called by runtime factory method).
+    pub(crate) fn set_metrics(&mut self, metrics: Arc<crate::pool::PoolMetrics>) {
+        self.metrics = Some(metrics);
     }
 
     /// Execute code in this persistent sandbox. JS global state from previous
@@ -959,6 +983,7 @@ impl PersistentSandbox {
         code: &str,
         input: serde_json::Value,
     ) -> Result<ExecutionResult> {
+        let _metrics_guard = self.metrics.as_ref().map(|m| m.execution_started());
         let timeout = std::time::Duration::from_secs(10);
 
         // Reset per-turn state

@@ -1493,6 +1493,94 @@ mod memory_protection {
 }
 
 // =========================================================================
+// 10b. Runtime Metrics
+// =========================================================================
+
+mod runtime_metrics {
+    use super::*;
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => { eprintln!("SKIP: guest WASM not found"); return; }
+            }
+        };
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metrics_track_execute_calls() {
+        let runtime = require_runtime!();
+        assert_eq!(runtime.metrics().total(), 0);
+        assert_eq!(runtime.metrics().active(), 0);
+
+        runtime.execute(ExecutionRequest::new("return 1;")).await.unwrap();
+        assert_eq!(runtime.metrics().total(), 1);
+
+        runtime.execute(ExecutionRequest::new("return 2;")).await.unwrap();
+        assert_eq!(runtime.metrics().total(), 2);
+
+        // Active should be 0 after completion
+        assert_eq!(runtime.metrics().active(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metrics_track_retained_sandbox() {
+        let runtime = require_runtime!();
+        let sandbox = runtime.create_sandbox().unwrap();
+
+        sandbox.execute(ExecutionRequest::new("return 1;")).await.unwrap();
+        assert_eq!(runtime.metrics().total(), 1);
+
+        sandbox.execute(ExecutionRequest::new("return 2;")).await.unwrap();
+        assert_eq!(runtime.metrics().total(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metrics_track_persistent_sandbox() {
+        let runtime = require_runtime!();
+        let caps = Arc::new(CapabilityRegistry::new());
+
+        let mut ps = runtime
+            .create_persistent_sandbox(Limits::default(), caps)
+            .await
+            .unwrap();
+
+        ps.execute("return 1;").await.unwrap();
+        assert_eq!(runtime.metrics().total(), 1);
+
+        ps.execute("return 2;").await.unwrap();
+        assert_eq!(runtime.metrics().total(), 2);
+
+        ps.execute("return 3;").await.unwrap();
+        assert_eq!(runtime.metrics().total(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metrics_active_during_concurrent_execution() {
+        let runtime = Arc::new(require_runtime!());
+        assert_eq!(runtime.metrics().active(), 0);
+
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let rt = runtime.clone();
+            handles.push(tokio::spawn(async move {
+                rt.execute(
+                    ExecutionRequest::new("let s=0; for(let i=0;i<10000;i++) s+=i; return s;")
+                ).await
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+
+        assert_eq!(runtime.metrics().total(), 5);
+        assert_eq!(runtime.metrics().active(), 0);
+    }
+}
+
+// =========================================================================
 // 11. KV Capability End-to-End
 // =========================================================================
 
