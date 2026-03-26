@@ -1561,28 +1561,28 @@ mod runtime_metrics {
         let runtime = Arc::new(require_runtime!());
         assert_eq!(runtime.metrics().active(), 0);
 
-        // Use a barrier so all tasks start executing before any completes.
-        // The heavy code keeps them busy long enough to observe active > 0.
+        // Use the console callback as a deterministic synchronization point.
+        // The callback fires synchronously from inside execute(), so
+        // active() is guaranteed > 0 at that instant — no timing dependency.
         let peak_active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let mut handles = Vec::new();
-        for _ in 0..5 {
+        for i in 0..5u32 {
             let rt = runtime.clone();
             let peak = peak_active.clone();
+            let rt_for_cb = rt.clone();
             handles.push(tokio::spawn(async move {
-                // Sample active count from inside the task (while execution is in flight)
-                let current = rt.metrics().active();
-                peak.fetch_max(current, std::sync::atomic::Ordering::Relaxed);
                 rt.execute(
-                    ExecutionRequest::new("let s=0; for(let i=0;i<100000;i++) s+=i; return s;")
+                    ExecutionRequest::new(format!("console.log('task {}'); return {};", i, i))
+                        .with_console_callback(move |_, _| {
+                            // Fires synchronously during execute() —
+                            // active() is guaranteed > 0 here.
+                            let current = rt_for_cb.metrics().active();
+                            peak.fetch_max(current, std::sync::atomic::Ordering::Relaxed);
+                        })
                 ).await
             }));
         }
-
-        // Also sample active count from the main thread while tasks run
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let main_sample = runtime.metrics().active();
-        peak_active.fetch_max(main_sample, std::sync::atomic::Ordering::Relaxed);
 
         for h in handles {
             h.await.unwrap().unwrap();
@@ -1590,10 +1590,9 @@ mod runtime_metrics {
 
         assert_eq!(runtime.metrics().total(), 5);
         assert_eq!(runtime.metrics().active(), 0);
-        // At least one sample should have seen active > 0 during execution
         assert!(
             peak_active.load(std::sync::atomic::Ordering::Relaxed) > 0,
-            "active count was never > 0 during concurrent execution"
+            "active count was never > 0 during execution (callback never fired)"
         );
     }
 }
