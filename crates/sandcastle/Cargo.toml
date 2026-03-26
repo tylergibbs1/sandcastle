@@ -43,4 +43,5 @@ path = "experiments/main.rs"
 workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "net"] }
+axum = "0.8"
