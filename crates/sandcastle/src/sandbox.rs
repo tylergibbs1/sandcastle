@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use wasmtime::{Caller, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::WasiCtxBuilder;
-use wasmtime_wasi::preview1::WasiP1Ctx;
+use wasmtime_wasi::p1::WasiP1Ctx;
 
 use crate::capability::{CapabilityBridge, CapabilityRegistry};
 use crate::error::{ExecutionError, Result, SandcastleError};
@@ -163,7 +163,7 @@ impl Sandbox {
     pub(crate) fn build_linker(engine: &Engine) -> Result<Linker<SandboxState>> {
         let mut linker: Linker<SandboxState> = Linker::new(engine);
 
-        wasmtime_wasi::preview1::add_to_linker_async(
+        wasmtime_wasi::p1::add_to_linker_async(
             &mut linker,
             |state: &mut SandboxState| &mut state.wasi,
         )
