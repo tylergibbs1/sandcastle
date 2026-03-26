@@ -22,8 +22,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rmp-serde = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
-wasmtime = "43"
-wasmtime-wasi = "43"
+wasmtime = "29"
+wasmtime-wasi = "29"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
