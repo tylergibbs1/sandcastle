@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 /// Resource limits for a sandbox execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Limits {
     /// Maximum memory in megabytes.
     pub memory_mb: u32,
@@ -42,7 +42,7 @@ impl Default for Limits {
 }
 
 /// Per-capability quota limits.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CapabilityLimits {
     /// Maximum number of calls to this capability per execution.
     pub max_calls: u32,

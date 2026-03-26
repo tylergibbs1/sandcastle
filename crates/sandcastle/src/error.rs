@@ -117,3 +117,11 @@ pub enum CapabilityError {
 }
 
 pub type Result<T> = std::result::Result<T, SandcastleError>;
+
+// Compile-time assertion: SandcastleError must be Send + Sync for async boundaries.
+const _: () = {
+    fn _assert_send_sync<T: Send + Sync>() {}
+    fn _check() {
+        _assert_send_sync::<SandcastleError>();
+    }
+};

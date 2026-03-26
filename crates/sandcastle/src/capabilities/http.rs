@@ -172,20 +172,25 @@ impl Capability for HttpCapability {
             })
             .collect();
 
-        // Read body, capped at max_response_bytes
-        let body_bytes = response.bytes().await.map_err(|e| {
-            CapabilityError::InvocationFailed {
+        // Read body in chunks, capped at max_response_bytes to prevent OOM
+        let mut body_bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        use futures_util::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| CapabilityError::InvocationFailed {
                 capability: "http".into(),
                 method: "request".into(),
                 message: format!("failed to read response body: {e}"),
+            })?;
+            let remaining = self.max_response_bytes.saturating_sub(body_bytes.len());
+            if remaining == 0 {
+                break;
             }
-        })?;
+            let take = chunk.len().min(remaining);
+            body_bytes.extend_from_slice(&chunk[..take]);
+        }
 
-        let body = if body_bytes.len() > self.max_response_bytes {
-            String::from_utf8_lossy(&body_bytes[..self.max_response_bytes]).into_owned()
-        } else {
-            String::from_utf8_lossy(&body_bytes).into_owned()
-        };
+        let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
         Ok(serde_json::json!({
             "status": status,

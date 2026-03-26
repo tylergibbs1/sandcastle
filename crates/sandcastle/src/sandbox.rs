@@ -12,7 +12,10 @@ use crate::capability::{CapabilityBridge, CapabilityRegistry};
 use crate::error::{ExecutionError, Result, SandcastleError};
 use crate::limits::Limits;
 use crate::transcript::{ExecutionTranscript, TranscriptRecorder};
-use crate::types::*;
+use crate::types::{
+    Artifact, CapabilityCall, ConsoleLevel, ConsoleMessage, ExecutionStatus, OutputArtifact,
+    OutputValue,
+};
 
 /// Drop guard that aborts a spawned task when dropped.
 /// Ensures the timeout task is cancelled even on early error returns.
@@ -139,14 +142,36 @@ pub(crate) struct SandboxState {
 pub struct Sandbox {
     engine: Engine,
     module: Module,
+    linker: Arc<Linker<SandboxState>>,
 }
 
 impl Sandbox {
-    pub(crate) fn new(engine: &Engine, module: &Module) -> Result<Self> {
+    pub(crate) fn new(
+        engine: &Engine,
+        module: &Module,
+        linker: Arc<Linker<SandboxState>>,
+    ) -> Result<Self> {
         Ok(Self {
             engine: engine.clone(),
             module: module.clone(),
+            linker,
         })
+    }
+
+    /// Build a pre-configured Linker with WASI and sandcastle host functions.
+    /// Called once at runtime init; the returned Linker is reused for every execution.
+    pub(crate) fn build_linker(engine: &Engine) -> Result<Linker<SandboxState>> {
+        let mut linker: Linker<SandboxState> = Linker::new(engine);
+
+        wasmtime_wasi::preview1::add_to_linker_async(
+            &mut linker,
+            |state: &mut SandboxState| &mut state.wasi,
+        )
+        .map_err(|e| SandcastleError::RuntimeInit(format!("WASI linking failed: {e}")))?;
+
+        Self::link_host_functions(&mut linker)?;
+
+        Ok(linker)
     }
 
     /// Execute code in this sandbox.
@@ -160,6 +185,7 @@ impl Sandbox {
             .instances(1)
             .tables(10)
             .memories(1)
+            .trap_on_grow_failure(true)
             .build();
 
         let recorder = TranscriptRecorder::new(fuel_limit, memory_limit);
@@ -194,19 +220,8 @@ impl Sandbox {
         // The timeout handler will increment the engine epoch past this.
         store.set_epoch_deadline(100);
 
-        let mut linker: Linker<SandboxState> = Linker::new(&self.engine);
-
-        // Link WASI functions
-        wasmtime_wasi::preview1::add_to_linker_async(
-            &mut linker,
-            |state: &mut SandboxState| &mut state.wasi,
-        )
-        .map_err(|e| SandcastleError::RuntimeInit(format!("WASI linking failed: {e}")))?;
-
-        // Link host functions
-        Self::link_host_functions(&mut linker)?;
-
-        let instance = linker
+        let instance = self
+            .linker
             .instantiate_async(&mut store, &self.module)
             .await
             .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?;
@@ -354,24 +369,61 @@ impl Sandbox {
             Err(e) => {
                 if was_cancelled {
                     (ExecutionStatus::Timeout, OutputValue::Null)
-                } else if let Some(trap) = e.downcast_ref::<Trap>() {
-                    match trap {
-                        Trap::OutOfFuel => (ExecutionStatus::FuelExhausted, OutputValue::Null),
-                        Trap::Interrupt => (ExecutionStatus::Timeout, OutputValue::Null),
-                        _ => (
+                } else {
+                    // Walk the error chain to find a Trap
+                    let trap = e.downcast_ref::<Trap>().copied().or_else(|| {
+                        e.chain()
+                            .find_map(|cause| cause.downcast_ref::<Trap>().copied())
+                    });
+
+                    // Check if any error in the chain mentions memory growth failure
+                    let is_memory_error = e.chain().any(|cause| {
+                        let msg = cause.to_string();
+                        msg.contains("forcing trap when growing memory")
+                            || msg.contains("memory minimum size")
+                    });
+
+                    if is_memory_error {
+                        (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                    } else if let Some(trap) = trap {
+                        match trap {
+                            Trap::OutOfFuel => {
+                                (ExecutionStatus::FuelExhausted, OutputValue::Null)
+                            }
+                            Trap::Interrupt => {
+                                (ExecutionStatus::Timeout, OutputValue::Null)
+                            }
+                            Trap::UnreachableCodeReached => {
+                                // Often caused by memory allocation failure in the guest.
+                                // Check if we're close to the memory limit.
+                                let usage_ratio =
+                                    peak_memory as f64 / memory_limit as f64;
+                                if usage_ratio > 0.85 {
+                                    (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                                } else {
+                                    (
+                                        ExecutionStatus::GuestError {
+                                            message: format!("WASM trap: {trap}"),
+                                        },
+                                        OutputValue::Null,
+                                    )
+                                }
+                            }
+                            _ => (
+                                ExecutionStatus::GuestError {
+                                    message: format!("WASM trap: {trap}"),
+                                },
+                                OutputValue::Null,
+                            ),
+                        }
+                    } else {
+                        (
                             ExecutionStatus::GuestError {
-                                message: format!("WASM trap: {trap}"),
+                                message: e.to_string(),
                             },
                             OutputValue::Null,
-                        ),
+                        )
                     }
-                } else {
-                    (
-                        ExecutionStatus::GuestError {
-                            message: e.to_string(),
-                        },
-                        OutputValue::Null,
-                    )
                 }
             }
         };
@@ -408,7 +460,7 @@ impl Sandbox {
                     if memory.read(&caller, ptr as usize, &mut buf).is_err() {
                         return;
                     }
-                    let message = String::from_utf8_lossy(&buf).to_string();
+                    let message = String::from_utf8_lossy(&buf).into_owned();
                     let elapsed_ms = caller.data().start_time.elapsed().as_millis() as u64;
 
                     let console_level = match level {
@@ -457,7 +509,7 @@ impl Sandbox {
                             caller.data_mut().output = OutputValue::Json(value);
                         }
                         Err(_) => {
-                            let s = String::from_utf8_lossy(&buf).to_string();
+                            let s = String::from_utf8_lossy(&buf).into_owned();
                             caller.data_mut().output = OutputValue::String(s);
                         }
                     }
@@ -525,8 +577,8 @@ impl Sandbox {
                         return -1;
                     }
 
-                    let capability = String::from_utf8_lossy(&cap_buf).to_string();
-                    let method = String::from_utf8_lossy(&method_buf).to_string();
+                    let capability = String::from_utf8_lossy(&cap_buf).into_owned();
+                    let method = String::from_utf8_lossy(&method_buf).into_owned();
 
                     let bridge = caller.data().capability_bridge.clone();
                     let start = Instant::now();
@@ -631,7 +683,7 @@ impl Sandbox {
                     {
                         return -1;
                     }
-                    let name = String::from_utf8_lossy(&name_buf).to_string();
+                    let name = String::from_utf8_lossy(&name_buf).into_owned();
 
                     // Clone to avoid borrow conflict with caller
                     let artifact_data = caller
@@ -688,7 +740,7 @@ impl Sandbox {
                         return -1;
                     }
 
-                    let name = String::from_utf8_lossy(&name_buf).to_string();
+                    let name = String::from_utf8_lossy(&name_buf).into_owned();
                     caller.data_mut().output_artifacts.push(OutputArtifact {
                         name,
                         data: data_buf,

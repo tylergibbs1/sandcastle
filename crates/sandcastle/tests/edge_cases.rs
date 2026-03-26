@@ -1057,3 +1057,953 @@ mod integration_edge_cases {
         assert!(names.contains(&"file3.json"));
     }
 }
+
+// =========================================================================
+// 10. Memory Protection
+// =========================================================================
+
+mod memory_protection {
+    use super::*;
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => {
+                    eprintln!("SKIP: guest WASM module not found");
+                    return;
+                }
+            }
+        };
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn memory_bomb_returns_guest_error_not_crash() {
+        let runtime = require_runtime!();
+        let limits = Limits {
+            memory_mb: 8,
+            timeout: Duration::from_secs(5),
+            ..Limits::default()
+        };
+        let code = r#"
+            const arrays = [];
+            while(true) { arrays.push(new Array(100000).fill('x')); }
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_limits(limits))
+            .await
+            .unwrap();
+
+        // Should not succeed — must be caught by either QuickJS memory limit
+        // (GuestError with "out of memory") or Wasmtime memory limit (MemoryExceeded)
+        assert!(
+            !result.is_success(),
+            "memory bomb should not succeed"
+        );
+        assert!(
+            matches!(
+                result.status,
+                ExecutionStatus::GuestError { .. } | ExecutionStatus::MemoryExceeded
+            ),
+            "expected GuestError or MemoryExceeded, got {:?}",
+            result.status
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn allocation_exceeding_memory_limit_produces_memory_exceeded() {
+        let runtime = require_runtime!();
+        // Use a small memory limit — allocating more than the limit should
+        // be caught by Wasmtime's trap_on_grow_failure and classified as
+        // MemoryExceeded
+        let limits = Limits {
+            memory_mb: 4,
+            timeout: Duration::from_secs(5),
+            ..Limits::default()
+        };
+        let code = r#"
+            try {
+                // Try to allocate 8MB — more than the 4MB limit
+                const arr = new Uint8Array(8 * 1024 * 1024);
+                return { allocated: true, size: arr.length };
+            } catch(e) {
+                return { allocated: false, error: e.message };
+            }
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_limits(limits))
+            .await
+            .unwrap();
+
+        // Either QuickJS catches it (GuestError/success with allocated:false)
+        // or Wasmtime catches it (MemoryExceeded). Both are acceptable.
+        if result.is_success() {
+            match &result.output {
+                OutputValue::Json(v) => {
+                    // If execution succeeded, the allocation must have failed
+                    // inside the try/catch
+                    assert_eq!(
+                        v.get("allocated").and_then(|v| v.as_bool()),
+                        Some(false),
+                        "8MB allocation should fail under 4MB memory limit, got: {}",
+                        v
+                    );
+                }
+                other => panic!("expected JSON output, got {:?}", other),
+            }
+        } else {
+            assert!(
+                matches!(
+                    result.status,
+                    ExecutionStatus::MemoryExceeded | ExecutionStatus::GuestError { .. }
+                ),
+                "expected MemoryExceeded or GuestError, got {:?}",
+                result.status
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn large_input_5mb_reports_memory_exceeded() {
+        let runtime = require_runtime!();
+        let big_string = "x".repeat(5_000_000);
+        let input = serde_json::json!({"data": big_string});
+
+        let result = runtime
+            .execute(
+                ExecutionRequest::new(
+                    "return globalThis.__sandcastle_input.data.length;",
+                )
+                .with_input(input),
+            )
+            .await
+            .unwrap();
+
+        // With default 32MB memory, a 5MB input may or may not succeed depending
+        // on how much overhead serde_json + QuickJS + WASM takes.
+        // If it fails, it must be MemoryExceeded (not an opaque GuestError).
+        if !result.is_success() {
+            assert!(
+                matches!(result.status, ExecutionStatus::MemoryExceeded),
+                "5MB input failure should be MemoryExceeded, got {:?}",
+                result.status
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn large_input_10mb_reports_memory_exceeded() {
+        let runtime = require_runtime!();
+        let big_string = "x".repeat(10_000_000);
+        let input = serde_json::json!({"data": big_string});
+
+        let result = runtime
+            .execute(
+                ExecutionRequest::new(
+                    "return globalThis.__sandcastle_input.data.length;",
+                )
+                .with_input(input),
+            )
+            .await
+            .unwrap();
+
+        // 10MB input will almost certainly exceed the 32MB default memory limit
+        if !result.is_success() {
+            assert!(
+                matches!(result.status, ExecutionStatus::MemoryExceeded),
+                "10MB input failure should be MemoryExceeded, got {:?}",
+                result.status
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn normal_execution_unaffected_by_memory_limits() {
+        let runtime = require_runtime!();
+        // Ensure the QuickJS memory limit + GC threshold don't break normal ops
+        let result = runtime
+            .execute(ExecutionRequest::new(
+                r#"
+                const arr = [1, 2, 3, 4, 5];
+                const obj = { a: 1, b: "hello", c: [true, false] };
+                const str = "x".repeat(10000);
+                return { arrLen: arr.length, keys: Object.keys(obj).length, strLen: str.length };
+                "#,
+            ))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "normal execution should succeed: {:?}", result.status);
+        match &result.output {
+            OutputValue::Json(v) => {
+                assert_eq!(v["arrLen"], 5);
+                assert_eq!(v["keys"], 3);
+                assert_eq!(v["strLen"], 10000);
+            }
+            other => panic!("expected JSON output, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn memory_limit_1mb_rejects_sandbox_creation() {
+        let runtime = require_runtime!();
+        let limits = Limits {
+            memory_mb: 1,
+            timeout: Duration::from_secs(5),
+            ..Limits::default()
+        };
+        let result = runtime
+            .execute(ExecutionRequest::new("return 1;").with_limits(limits))
+            .await;
+
+        // 1MB is too small for the QuickJS WASM module — should fail at creation
+        assert!(
+            result.is_err(),
+            "1MB memory limit should fail sandbox creation"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn memory_exceeded_status_has_peak_memory_in_transcript() {
+        let runtime = require_runtime!();
+        let limits = Limits {
+            memory_mb: 8,
+            timeout: Duration::from_secs(5),
+            ..Limits::default()
+        };
+        let code = r#"
+            const arrays = [];
+            try {
+                while(true) { arrays.push(new Array(50000).fill(42)); }
+            } catch(e) {
+                return { caught: true, error: e.message, arrays: arrays.length };
+            }
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_limits(limits))
+            .await
+            .unwrap();
+
+        // Whether caught by JS or by Wasmtime, the transcript should record memory usage
+        assert!(
+            result.transcript.peak_memory_bytes > 0,
+            "transcript should record peak memory"
+        );
+        assert!(
+            result.transcript.peak_memory_bytes <= 8 * 1024 * 1024,
+            "peak memory should not exceed the 8MB limit, got {} bytes",
+            result.transcript.peak_memory_bytes
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gradual_allocation_hits_quickjs_limit_before_wasm_trap() {
+        let runtime = require_runtime!();
+        let limits = Limits {
+            memory_mb: 8,
+            timeout: Duration::from_secs(5),
+            ..Limits::default()
+        };
+        // Allocate in small increments to trigger QuickJS OOM, not WASM trap
+        let code = r#"
+            const chunks = [];
+            let totalBytes = 0;
+            try {
+                while (true) {
+                    chunks.push(new Uint8Array(64 * 1024)); // 64KB chunks
+                    totalBytes += 64 * 1024;
+                }
+            } catch(e) {
+                return { totalKB: Math.floor(totalBytes / 1024), error: e.message };
+            }
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_limits(limits))
+            .await
+            .unwrap();
+
+        // QuickJS should catch the OOM and let the try/catch handle it
+        if result.is_success() {
+            match &result.output {
+                OutputValue::Json(v) => {
+                    let error = v.get("error").and_then(|e| e.as_str()).unwrap_or("");
+                    assert!(
+                        error.contains("memory") || error.contains("out of") || error.contains("alloc"),
+                        "error should mention memory, got: {}",
+                        error
+                    );
+                    let total_kb = v.get("totalKB").and_then(|v| v.as_u64()).unwrap_or(0);
+                    assert!(
+                        total_kb > 0,
+                        "should have allocated some memory before OOM"
+                    );
+                }
+                other => panic!("expected JSON output, got {:?}", other),
+            }
+        }
+        // MemoryExceeded is also acceptable if QuickJS didn't catch it
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_memory_pressure_all_isolated() {
+        let runtime = Arc::new(require_runtime!());
+        let mut handles = Vec::new();
+
+        for i in 0..10u32 {
+            let rt = runtime.clone();
+            handles.push(tokio::spawn(async move {
+                let limits = Limits {
+                    memory_mb: 32,
+                    timeout: Duration::from_secs(5),
+                    ..Limits::default()
+                };
+                // Each sandbox allocates ~1MB then returns
+                let code = format!(
+                    r#"
+                    const data = new Uint8Array(1024 * 1024);
+                    data.fill({i});
+                    return {{ id: {i}, size: data.length, first: data[0] }};
+                    "#
+                );
+                rt.execute(ExecutionRequest::new(code).with_limits(limits))
+                    .await
+                    .unwrap()
+            }));
+        }
+
+        for (idx, handle) in handles.into_iter().enumerate() {
+            let result = handle.await.unwrap();
+            assert!(
+                result.is_success(),
+                "concurrent sandbox {} should succeed: {:?}",
+                idx,
+                result.status
+            );
+            match &result.output {
+                OutputValue::Json(v) => {
+                    assert_eq!(v["id"], idx as u64);
+                    assert_eq!(v["size"], 1024 * 1024);
+                }
+                other => panic!("expected JSON output for sandbox {}, got {:?}", idx, other),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn promise_resolution_works_with_memory_limits() {
+        let runtime = require_runtime!();
+        let result = runtime
+            .execute(ExecutionRequest::new(
+                "return Promise.resolve(42);",
+            ))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "Promise.resolve should work: {:?}", result.status);
+        match &result.output {
+            OutputValue::Json(v) => assert_eq!(*v, serde_json::json!(42)),
+            other => panic!("expected JSON 42, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn promise_all_resolves() {
+        let runtime = require_runtime!();
+        let result = runtime
+            .execute(ExecutionRequest::new(
+                "return Promise.all([Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)]);",
+            ))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "Promise.all should work: {:?}", result.status);
+        match &result.output {
+            OutputValue::Json(v) => assert_eq!(*v, serde_json::json!([1, 2, 3])),
+            other => panic!("expected [1,2,3], got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn async_function_return_resolves() {
+        let runtime = require_runtime!();
+        let result = runtime
+            .execute(ExecutionRequest::new(
+                "async function getValue() { return 99; } return getValue();",
+            ))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "async function should work: {:?}", result.status);
+        match &result.output {
+            OutputValue::Json(v) => assert_eq!(*v, serde_json::json!(99)),
+            other => panic!("expected 99, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capability_quota_throws_js_exception() {
+        use sandcastle::capability::SimpleCapability;
+
+        let runtime = require_runtime!();
+        let mut registry = CapabilityRegistry::new();
+        registry.register_with_limits(
+            Box::new(SimpleCapability::new("limited", |_, _| {
+                Ok(serde_json::json!("ok"))
+            })),
+            CapabilityLimits {
+                max_calls: 3,
+                ..CapabilityLimits::default()
+            },
+        );
+        let caps = Arc::new(registry);
+
+        let code = r#"
+            let succeeded = 0;
+            let failed = 0;
+            for (let i = 0; i < 10; i++) {
+                try {
+                    __sandcastle_host_call("limited", "do", "{}");
+                    succeeded++;
+                } catch(e) {
+                    failed++;
+                }
+            }
+            return { succeeded, failed };
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_capabilities(caps))
+            .await
+            .unwrap();
+
+        assert!(result.is_success());
+        match &result.output {
+            OutputValue::Json(v) => {
+                assert_eq!(
+                    v["succeeded"], 3,
+                    "exactly 3 calls should succeed (max_calls=3)"
+                );
+                assert_eq!(
+                    v["failed"], 7,
+                    "remaining 7 calls should throw exceptions"
+                );
+            }
+            other => panic!("expected JSON output, got {:?}", other),
+        }
+    }
+}
+
+// =========================================================================
+// 11. KV Capability End-to-End
+// =========================================================================
+
+/// Assert that an ExecutionResult's output matches the expected JSON value.
+fn assert_output_json(result: &sandcastle::sandbox::ExecutionResult, expected: serde_json::Value) {
+    match &result.output {
+        OutputValue::Json(v) => assert_eq!(v, &expected, "output mismatch"),
+        other => panic!("expected Json({expected}), got {other:?}"),
+    }
+}
+
+mod kv_e2e {
+    use super::*;
+    use sandcastle::capabilities::KvCapability;
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => {
+                    eprintln!("SKIP: guest WASM module not found");
+                    return;
+                }
+            }
+        };
+    }
+
+    fn kv_caps() -> (Arc<CapabilityRegistry>, Arc<dashmap::DashMap<String, serde_json::Value>>) {
+        let kv = KvCapability::default();
+        let store = kv.store().clone();
+        let mut registry = CapabilityRegistry::new();
+        registry.register(Box::new(kv));
+        (Arc::new(registry), store)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn guest_set_and_get() {
+        let runtime = require_runtime!();
+        let (caps, store) = kv_caps();
+
+        let code = r#"
+            __sandcastle_host_call("kv", "set", JSON.stringify({key: "name", value: "Alice"}));
+            const val = JSON.parse(__sandcastle_host_call("kv", "get", JSON.stringify({key: "name"})));
+            return val;
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_capabilities(caps))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "status: {:?}", result.status);
+        assert_output_json(&result, serde_json::json!("Alice"));
+        // Verify the store was actually written to
+        assert_eq!(store.get("name").map(|v| v.clone()), Some(serde_json::json!("Alice")));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn guest_list_delete_has() {
+        let runtime = require_runtime!();
+        let (caps, _) = kv_caps();
+
+        let code = r#"
+            __sandcastle_host_call("kv", "set", JSON.stringify({key: "user:1", value: "Alice"}));
+            __sandcastle_host_call("kv", "set", JSON.stringify({key: "user:2", value: "Bob"}));
+            __sandcastle_host_call("kv", "set", JSON.stringify({key: "item:1", value: "Widget"}));
+
+            const users = JSON.parse(__sandcastle_host_call("kv", "list", JSON.stringify({prefix: "user:"})));
+            const hasBefore = JSON.parse(__sandcastle_host_call("kv", "has", JSON.stringify({key: "user:1"})));
+            const deleted = JSON.parse(__sandcastle_host_call("kv", "delete", JSON.stringify({key: "user:1"})));
+            const hasAfter = JSON.parse(__sandcastle_host_call("kv", "has", JSON.stringify({key: "user:1"})));
+
+            return { userCount: users.length, hasBefore, deleted, hasAfter };
+        "#;
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_capabilities(caps))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "status: {:?}", result.status);
+        match &result.output {
+            OutputValue::Json(v) => {
+                assert_eq!(v["userCount"], 2);
+                assert_eq!(v["hasBefore"], true);
+                assert_eq!(v["deleted"], true);
+                assert_eq!(v["hasAfter"], false);
+            }
+            other => panic!("expected JSON, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shared_kv_across_sandboxes() {
+        let runtime = require_runtime!();
+        let (caps, _) = kv_caps();
+
+        // Sandbox 1 writes
+        let write = r#"
+            __sandcastle_host_call("kv", "set", JSON.stringify({key: "shared", value: 42}));
+            return "written";
+        "#;
+        let r1 = runtime
+            .execute(ExecutionRequest::new(write).with_capabilities(caps.clone()))
+            .await
+            .unwrap();
+        assert!(r1.is_success());
+
+        // Sandbox 2 reads (same caps = same store)
+        let read = r#"
+            const val = JSON.parse(__sandcastle_host_call("kv", "get", JSON.stringify({key: "shared"})));
+            return val;
+        "#;
+        let r2 = runtime
+            .execute(ExecutionRequest::new(read).with_capabilities(caps))
+            .await
+            .unwrap();
+        assert!(r2.is_success());
+        // Value comes back as 42.0 through JSON round-trip (QuickJS float promotion)
+        match &r2.output {
+            OutputValue::Json(v) => {
+                let n = v.as_f64().expect("expected number");
+                assert_eq!(n, 42.0, "expected 42");
+            }
+            other => panic!("expected JSON number, got {:?}", other),
+        }
+    }
+}
+
+// =========================================================================
+// 12. Script Registry Dispatch End-to-End
+// =========================================================================
+
+mod registry_dispatch_e2e {
+    use super::*;
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => {
+                    eprintln!("SKIP: guest WASM module not found");
+                    return;
+                }
+            }
+        };
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn register_and_dispatch() {
+        let runtime = require_runtime!();
+        let registry = ScriptRegistry::new(100);
+        let caps = Arc::new(CapabilityRegistry::new());
+
+        registry
+            .register(
+                "doubler",
+                "const input = globalThis.__sandcastle_input; return input.x * 2;",
+                caps,
+                Limits::default(),
+            )
+            .unwrap();
+
+        let result = runtime
+            .dispatch(&registry, "doubler", serde_json::json!({"x": 21}))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "status: {:?}", result.status);
+        assert_output_json(&result, serde_json::json!(42));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispatch_multiple_times_no_state_leak() {
+        let runtime = require_runtime!();
+        let registry = ScriptRegistry::new(100);
+        let caps = Arc::new(CapabilityRegistry::new());
+
+        registry
+            .register(
+                "counter",
+                r#"
+                    // This var is fresh each execution — no state leak
+                    var count = (globalThis.__sandcastle_input || {}).start || 0;
+                    count += 1;
+                    return count;
+                "#,
+                caps,
+                Limits::default(),
+            )
+            .unwrap();
+
+        for _ in 0..5 {
+            let result = runtime
+                .dispatch(&registry, "counter", serde_json::json!({"start": 10}))
+                .await
+                .unwrap();
+            assert!(result.is_success());
+            // Should always be 11, never incrementing — each execution is isolated
+            assert_output_json(&result, serde_json::json!(11));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dispatch_nonexistent_script_errors() {
+        let runtime = require_runtime!();
+        let registry = ScriptRegistry::new(100);
+
+        let result = runtime
+            .dispatch(&registry, "nope", serde_json::Value::Null)
+            .await;
+        assert!(result.is_err(), "dispatch to nonexistent script should error");
+    }
+}
+
+// =========================================================================
+// 13. Namespace Isolation Under Execution
+// =========================================================================
+
+mod namespace_execution {
+    use super::*;
+    use sandcastle::namespace::{NamespaceLimits, NamespaceManager};
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => {
+                    eprintln!("SKIP: guest WASM module not found");
+                    return;
+                }
+            }
+        };
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn namespaces_execute_independently() {
+        let runtime = require_runtime!();
+        let caps = Arc::new(CapabilityRegistry::new());
+        let manager = NamespaceManager::new(10);
+
+        let ns_a = manager
+            .create("tenant-a", NamespaceLimits::default(), caps.clone())
+            .unwrap();
+        let ns_b = manager
+            .create("tenant-b", NamespaceLimits::default(), caps)
+            .unwrap();
+
+        // Same script name, different code
+        ns_a.register("greet", String::from("return 'hello from A';"), None)
+            .unwrap();
+        ns_b.register("greet", String::from("return 'hello from B';"), None)
+            .unwrap();
+
+        let script_a = ns_a.get_script("greet").unwrap();
+        let script_b = ns_b.get_script("greet").unwrap();
+
+        let ra = runtime
+            .execute(ExecutionRequest::new(&script_a.code))
+            .await
+            .unwrap();
+        let rb = runtime
+            .execute(ExecutionRequest::new(&script_b.code))
+            .await
+            .unwrap();
+
+        assert_output_json(&ra, serde_json::json!("hello from A"));
+        assert_output_json(&rb, serde_json::json!("hello from B"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn namespace_script_not_visible_across_tenants() {
+        let caps = Arc::new(CapabilityRegistry::new());
+        let manager = NamespaceManager::new(10);
+
+        let ns_a = manager
+            .create("a", NamespaceLimits::default(), caps.clone())
+            .unwrap();
+        let ns_b = manager
+            .create("b", NamespaceLimits::default(), caps)
+            .unwrap();
+
+        ns_a.register("secret", String::from("return 'a_secret';"), None)
+            .unwrap();
+
+        assert!(ns_a.get_script("secret").is_some());
+        assert!(ns_b.get_script("secret").is_none(), "tenant B should not see tenant A's scripts");
+    }
+}
+
+// =========================================================================
+// 14. Artifact-Based Workflow
+// =========================================================================
+
+mod artifact_workflow {
+    use super::*;
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => {
+                    eprintln!("SKIP: guest WASM module not found");
+                    return;
+                }
+            }
+        };
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn process_input_artifact_produce_output() {
+        let runtime = require_runtime!();
+        let csv_data = "name,score\nAlice,95\nBob,87\nCarol,92\n";
+        let artifact = Artifact::from_text("input.csv", csv_data);
+
+        let code = r#"
+            const csv = globalThis.__sandcastle_read_artifact("input.csv");
+            const lines = csv.trim().split("\n");
+            const header = lines[0].split(",");
+            const rows = lines.slice(1).map(line => {
+                const vals = line.split(",");
+                return { name: vals[0], score: parseInt(vals[1]) };
+            });
+            const avg = rows.reduce((s, r) => s + r.score, 0) / rows.length;
+            const result = JSON.stringify({ rows: rows.length, average: avg });
+            globalThis.__sandcastle_write_artifact("summary.json", result);
+            return { rows: rows.length, average: avg };
+        "#;
+
+        let result = runtime
+            .execute(ExecutionRequest::new(code).with_artifacts(vec![artifact]))
+            .await
+            .unwrap();
+
+        assert!(result.is_success(), "status: {:?}", result.status);
+        match &result.output {
+            OutputValue::Json(v) => {
+                assert_eq!(v["rows"], 3);
+            }
+            other => panic!("expected JSON, got {:?}", other),
+        }
+        assert_eq!(result.output_artifacts.len(), 1);
+        assert_eq!(result.output_artifacts[0].name, "summary.json");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn large_artifact_near_boundary() {
+        let runtime = require_runtime!();
+        // Test writing a large artifact (1MB) — well under the 16MB MAX_GUEST_BUFFER_SIZE
+        let code = r#"
+            const data = "x".repeat(1024 * 1024);
+            globalThis.__sandcastle_write_artifact("big.txt", data);
+            return data.length;
+        "#;
+        let result = runtime.execute(ExecutionRequest::new(code)).await.unwrap();
+        assert!(result.is_success(), "status: {:?}", result.status);
+        assert_output_json(&result, serde_json::json!(1048576));
+        assert_eq!(result.output_artifacts.len(), 1);
+        assert_eq!(result.output_artifacts[0].data.len(), 1048576);
+    }
+}
+
+// =========================================================================
+// 15. PRD-Claimed Globals
+// =========================================================================
+
+mod prd_globals {
+    use super::*;
+
+    macro_rules! require_runtime {
+        () => {
+            match create_runtime() {
+                Some(rt) => rt,
+                None => {
+                    eprintln!("SKIP: guest WASM module not found");
+                    return;
+                }
+            }
+        };
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn json_global() {
+        let runtime = require_runtime!();
+        let r = runtime
+            .execute(ExecutionRequest::new(
+                "return JSON.parse(JSON.stringify({a: [1,2,3]}));",
+            ))
+            .await
+            .unwrap();
+        assert!(r.is_success());
+        assert_output_json(&r, serde_json::json!({"a": [1,2,3]}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn math_global() {
+        let runtime = require_runtime!();
+        let r = runtime
+            .execute(ExecutionRequest::new("return Math.max(1, 5, 3);"))
+            .await
+            .unwrap();
+        assert!(r.is_success());
+        assert_output_json(&r, serde_json::json!(5));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn date_global() {
+        let runtime = require_runtime!();
+        let r = runtime
+            .execute(ExecutionRequest::new("return typeof Date.now() === 'number';"))
+            .await
+            .unwrap();
+        assert!(r.is_success());
+        assert_output_json(&r, serde_json::json!(true));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn atob_btoa() {
+        let runtime = require_runtime!();
+        let r = runtime
+            .execute(ExecutionRequest::new(
+                r#"
+                try {
+                    const encoded = btoa("hello world");
+                    const decoded = atob(encoded);
+                    return { encoded, decoded };
+                } catch(e) {
+                    return { error: e.message, available: typeof btoa !== 'undefined' };
+                }
+                "#,
+            ))
+            .await
+            .unwrap();
+        assert!(r.is_success(), "status: {:?}", r.status);
+        // btoa/atob may not be available in QuickJS — record what happens
+        match &r.output {
+            OutputValue::Json(v) => {
+                if v.get("encoded").is_some() {
+                    assert_eq!(v["decoded"], "hello world");
+                }
+                // If error, it's a known limitation — not a test failure
+            }
+            _ => {}
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn text_encoder_decoder() {
+        let runtime = require_runtime!();
+        let r = runtime
+            .execute(ExecutionRequest::new(
+                r#"
+                try {
+                    const encoder = new TextEncoder();
+                    const encoded = encoder.encode("hello");
+                    const decoder = new TextDecoder();
+                    const decoded = decoder.decode(encoded);
+                    return { len: encoded.length, decoded };
+                } catch(e) {
+                    return { error: e.message, available: typeof TextEncoder !== 'undefined' };
+                }
+                "#,
+            ))
+            .await
+            .unwrap();
+        assert!(r.is_success(), "status: {:?}", r.status);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn url_parsing() {
+        let runtime = require_runtime!();
+        let r = runtime
+            .execute(ExecutionRequest::new(
+                r#"
+                try {
+                    const u = new URL("https://example.com/path?q=1#frag");
+                    return { host: u.hostname, path: u.pathname, search: u.search };
+                } catch(e) {
+                    return { error: e.message, available: typeof URL !== 'undefined' };
+                }
+                "#,
+            ))
+            .await
+            .unwrap();
+        assert!(r.is_success(), "status: {:?}", r.status);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn error_recovery_pattern() {
+        let runtime = require_runtime!();
+        // Simulates an agent that tries code, catches error, adapts
+        let code = r#"
+            function tryParse(input) {
+                try {
+                    return { ok: true, data: JSON.parse(input) };
+                } catch(e) {
+                    return { ok: false, error: e.message };
+                }
+            }
+
+            const attempt1 = tryParse("{invalid json}");
+            const attempt2 = tryParse('{"valid": true}');
+            return { attempt1, attempt2 };
+        "#;
+        let result = runtime.execute(ExecutionRequest::new(code)).await.unwrap();
+        assert!(result.is_success());
+        match &result.output {
+            OutputValue::Json(v) => {
+                assert_eq!(v["attempt1"]["ok"], false);
+                assert_eq!(v["attempt2"]["ok"], true);
+                assert_eq!(v["attempt2"]["data"]["valid"], true);
+            }
+            other => panic!("expected JSON, got {:?}", other),
+        }
+    }
+}

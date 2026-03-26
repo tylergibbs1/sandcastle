@@ -289,7 +289,7 @@ impl CapabilityBridge {
         let quotas = registry
             .capabilities
             .iter()
-            .map(|(name, (_, limits))| (name.clone(), QuotaTracker::new(limits.clone())))
+            .map(|(name, (_, limits))| (name.clone(), QuotaTracker::new(*limits)))
             .collect();
 
         Self {
@@ -442,9 +442,24 @@ impl CapabilityBridge {
             None
         };
 
-        // Call capability synchronously
+        // Call capability synchronously, with timeout matching the async path
+        let timeout_duration = self
+            .quotas
+            .get(capability)
+            .map(|q| q.call_timeout())
+            .unwrap_or_else(|| std::time::Duration::from_secs(30));
+
         let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(cap.call(method, input))
+            tokio::runtime::Handle::current().block_on(async {
+                match tokio::time::timeout(timeout_duration, cap.call(method, input)).await {
+                    Ok(r) => r,
+                    Err(_) => Err(CapabilityError::Timeout {
+                        capability: capability.to_owned(),
+                        method: method.to_owned(),
+                        elapsed_ms: timeout_duration.as_millis() as u64,
+                    }),
+                }
+            })
         });
 
         match result {
@@ -475,13 +490,20 @@ impl CapabilityBridge {
 
     /// Return all capability calls recorded during this execution.
     pub fn drain_calls(&self) -> Vec<CapabilityCall> {
-        let mut calls = self.calls.lock().expect("calls mutex poisoned");
-        std::mem::take(&mut *calls)
+        if let Ok(mut calls) = self.calls.lock() {
+            std::mem::take(&mut *calls)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Return a snapshot of recorded calls without draining them.
     pub fn calls(&self) -> Vec<CapabilityCall> {
-        self.calls.lock().expect("calls mutex poisoned").clone()
+        if let Ok(calls) = self.calls.lock() {
+            calls.clone()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Get the quota tracker for a specific capability.

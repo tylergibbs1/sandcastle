@@ -151,7 +151,13 @@ async fn execute_handler(
         .with_limits(limits);
 
     match state.runtime.execute(request).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap())).into_response(),
+        Ok(result) => match serde_json::to_value(&result) {
+            Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { ok: false, error: format!("serialization error: {e}") }),
+            ).into_response(),
+        },
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -239,7 +245,7 @@ async fn dispatch_handler(
         }
     };
 
-    let mut limits = script.limits.clone();
+    let mut limits = script.limits;
     if let Some(b) = &body.limits {
         if let Some(m) = b.memory_mb { limits.memory_mb = m; }
         if let Some(t) = b.timeout_ms { limits.timeout = std::time::Duration::from_millis(t); }
@@ -252,7 +258,13 @@ async fn dispatch_handler(
         .with_limits(limits);
 
     match state.runtime.execute(request).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap())).into_response(),
+        Ok(result) => match serde_json::to_value(&result) {
+            Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { ok: false, error: format!("serialization error: {e}") }),
+            ).into_response(),
+        },
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { ok: false, error: e.to_string() }),
@@ -425,7 +437,7 @@ async fn ns_dispatch_handler(
         }
     };
 
-    let mut limits = script.limits.clone();
+    let mut limits = script.limits;
     if let Some(b) = &body.limits {
         if let Some(m) = b.memory_mb { limits.memory_mb = m; }
         if let Some(t) = b.timeout_ms { limits.timeout = std::time::Duration::from_millis(t); }
@@ -438,7 +450,13 @@ async fn ns_dispatch_handler(
         .with_limits(limits);
 
     match state.runtime.execute(request).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap())).into_response(),
+        Ok(result) => match serde_json::to_value(&result) {
+            Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { ok: false, error: format!("serialization error: {e}") }),
+            ).into_response(),
+        },
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { ok: false, error: e.to_string() }),

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use crate::capability::CapabilityRegistry;
 use crate::error::{Result, SandcastleError};
@@ -48,7 +50,7 @@ impl ScriptRegistry {
         let name = name.into();
         let code = code.into();
 
-        let mut scripts = self.scripts.write().unwrap();
+        let mut scripts = self.scripts.write();
 
         // Allow replacing an existing script without counting against the limit.
         if !scripts.contains_key(&name) && scripts.len() >= self.max_scripts {
@@ -71,25 +73,25 @@ impl ScriptRegistry {
 
     /// Retrieve a previously registered script by name.
     pub fn get(&self, name: &str) -> Option<Arc<CompiledScript>> {
-        let scripts = self.scripts.read().unwrap();
+        let scripts = self.scripts.read();
         scripts.get(name).cloned()
     }
 
     /// Remove a script by name. Returns `true` if the script existed.
     pub fn remove(&self, name: &str) -> bool {
-        let mut scripts = self.scripts.write().unwrap();
+        let mut scripts = self.scripts.write();
         scripts.remove(name).is_some()
     }
 
     /// List the names of all registered scripts.
     pub fn list(&self) -> Vec<String> {
-        let scripts = self.scripts.read().unwrap();
+        let scripts = self.scripts.read();
         scripts.keys().cloned().collect()
     }
 
     /// Return the number of currently registered scripts.
     pub fn len(&self) -> usize {
-        let scripts = self.scripts.read().unwrap();
+        let scripts = self.scripts.read();
         scripts.len()
     }
 

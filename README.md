@@ -26,7 +26,7 @@ AI agents need to run code. The alternatives are slow (Docker ~500ms), platform-
 |----------|---------|--------|----------|----------|
 | Docker | ~500ms | ~100MB+ | Yes | Namespace isolation |
 | Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | V8 isolates |
-| E2B | ~500ms | ~100MB+ | Hosted only | Firecracker |
+| E2B | ~100-200ms | ~512MB min | Self-hostable (requires KVM) | Firecracker |
 | **SandCastle** | **<1ms** | **~1.3MB** | **Anywhere** | **WASM sandbox** |
 
 ## Quick Start
@@ -58,11 +58,11 @@ println!("{:?}", result.output); // Json(2)
 ### TypeScript SDK
 
 ```bash
-bun add sandcastle  # or npm install sandcastle
+bun add @grayhaven/sandcastle  # or npm install @grayhaven/sandcastle
 ```
 
 ```typescript
-import { SandCastle } from "sandcastle";
+import { SandCastle } from "@grayhaven/sandcastle";
 
 const sc = new SandCastle();
 const result = await sc.run<number>("return 1 + 1;");
@@ -206,7 +206,7 @@ const codemode = createCodeTool({ tools, executor });
 SandCastle is designed to be a tool in an AI agent's toolkit:
 
 ```typescript
-import { SandCastle } from "sandcastle";
+import { SandCastle } from "@grayhaven/sandcastle";
 
 const sandbox = new SandCastle();
 
@@ -258,8 +258,8 @@ cd guest && ./build.sh          # Build QuickJS WASM guest (~823KB)
 cargo build --release            # Build runtime + CLI
 
 # Run tests
-cargo test                       # 94 Rust tests
-cd sdk/typescript && bun test    # 204 TypeScript tests
+cargo test                       # 54 Rust tests
+cd sdk/typescript && bun test    # 118 TypeScript tests
 
 # Run benchmarks
 cargo bench -p sandcastle
@@ -295,7 +295,6 @@ sandcastle/
 │   │   └── guest/index.d.ts     # Guest-side type declarations
 │   └── test/                # 204 tests (unit + integration + agent)
 ├── docs/                    # Architecture diagrams (Mermaid)
-├── proto/                   # gRPC protobuf definitions
 └── examples/                # Example scripts
 ```
 

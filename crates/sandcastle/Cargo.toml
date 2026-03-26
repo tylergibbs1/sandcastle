@@ -19,19 +19,28 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
+parking_lot = "0.12"
+reqwest = { version = "0.12", features = ["json", "stream"], optional = true }
+futures-util = { version = "0.3", optional = true }
 dashmap = { version = "6", optional = true }
 url = { version = "2", optional = true }
 
 [features]
 default = ["builtins"]
 kv = ["dashmap"]
-http-client = ["reqwest", "url"]
+http-client = ["reqwest", "url", "futures-util"]
 builtins = ["kv", "http-client"]
 
 [[bench]]
 name = "sandbox"
 harness = false
+
+[[example]]
+name = "experiments"
+path = "experiments/main.rs"
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

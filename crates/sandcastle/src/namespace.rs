@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use tokio::sync::Semaphore;
 
@@ -74,7 +76,7 @@ impl DispatchNamespace {
         code: impl Into<String>,
         limits: Option<Limits>,
     ) -> Result<()> {
-        let limits = limits.unwrap_or_else(|| self.limits.default_limits.clone());
+        let limits = limits.unwrap_or_else(|| self.limits.default_limits);
         self.registry
             .register(name, code, self.default_capabilities.clone(), limits)
     }
@@ -89,7 +91,7 @@ impl DispatchNamespace {
         capabilities: Arc<CapabilityRegistry>,
         limits: Option<Limits>,
     ) -> Result<()> {
-        let limits = limits.unwrap_or_else(|| self.limits.default_limits.clone());
+        let limits = limits.unwrap_or_else(|| self.limits.default_limits);
         self.registry.register(name, code, capabilities, limits)
     }
 
@@ -156,7 +158,7 @@ impl NamespaceManager {
         capabilities: Arc<CapabilityRegistry>,
     ) -> Result<Arc<DispatchNamespace>> {
         let name = name.into();
-        let mut namespaces = self.namespaces.write().unwrap();
+        let mut namespaces = self.namespaces.write();
 
         if namespaces.contains_key(&name) {
             return Err(SandcastleError::Config(format!(
@@ -178,19 +180,19 @@ impl NamespaceManager {
 
     /// Retrieve a namespace by name.
     pub fn get(&self, name: &str) -> Option<Arc<DispatchNamespace>> {
-        let namespaces = self.namespaces.read().unwrap();
+        let namespaces = self.namespaces.read();
         namespaces.get(name).cloned()
     }
 
     /// Delete a namespace by name. Returns `true` if the namespace existed.
     pub fn delete(&self, name: &str) -> bool {
-        let mut namespaces = self.namespaces.write().unwrap();
+        let mut namespaces = self.namespaces.write();
         namespaces.remove(name).is_some()
     }
 
     /// List the names of all namespaces.
     pub fn list(&self) -> Vec<String> {
-        let namespaces = self.namespaces.read().unwrap();
+        let namespaces = self.namespaces.read();
         namespaces.keys().cloned().collect()
     }
 }

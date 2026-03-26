@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
-use wasmtime::{Config as WasmConfig, Engine, Module};
+use wasmtime::{Config as WasmConfig, Engine, Linker, Module};
 
 use crate::error::{Result, SandcastleError};
-use crate::sandbox::{ExecutionRequest, ExecutionResult, Sandbox};
+use crate::sandbox::{ExecutionRequest, ExecutionResult, Sandbox, SandboxState};
 use crate::types::SecurityMode;
 
 /// Configuration for the SandCastle runtime.
@@ -33,7 +33,8 @@ impl Config {
 pub struct SandCastle {
     engine: Engine,
     module: Module,
-    #[allow(dead_code)]
+    linker: Arc<Linker<SandboxState>>,
+    #[expect(dead_code, reason = "will be used when Hardened mode is implemented")]
     security_mode: SecurityMode,
     concurrency_semaphore: Arc<Semaphore>,
 }
@@ -61,6 +62,8 @@ impl SandCastle {
         let module = Module::new(&engine, &config.guest_module)
             .map_err(|e| SandcastleError::Compilation(e.to_string()))?;
 
+        let linker = Arc::new(Sandbox::build_linker(&engine)?);
+
         let concurrency_semaphore = Arc::new(Semaphore::new(config.max_concurrent_sandboxes));
         let security_mode = config.security_mode;
 
@@ -74,6 +77,7 @@ impl SandCastle {
         Ok(Self {
             engine,
             module,
+            linker,
             security_mode,
             concurrency_semaphore,
         })
@@ -95,14 +99,14 @@ impl SandCastle {
 
         debug!(code_len = request.code.len(), "Creating sandbox for execution");
 
-        let sandbox = Sandbox::new(&self.engine, &self.module)?;
+        let sandbox = Sandbox::new(&self.engine, &self.module, self.linker.clone())?;
 
         sandbox.execute(request).await
     }
 
     /// Create a retained sandbox for multi-turn execution.
     pub fn create_sandbox(&self) -> Result<Sandbox> {
-        Sandbox::new(&self.engine, &self.module)
+        Sandbox::new(&self.engine, &self.module, self.linker.clone())
     }
 
     /// Dispatch to a pre-registered script by name.
@@ -122,7 +126,7 @@ impl SandCastle {
         let request = ExecutionRequest::new(&script.code)
             .with_input(input)
             .with_capabilities(script.capabilities.clone())
-            .with_limits(script.limits.clone());
+            .with_limits(script.limits);
 
         self.execute(request).await
     }

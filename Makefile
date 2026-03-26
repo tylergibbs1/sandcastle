@@ -1,4 +1,4 @@
-.PHONY: build build-guest build-host test bench clean fmt clippy
+.PHONY: build build-guest build-host test bench clean fmt clippy publish-sdk
 
 # Build everything
 build: build-guest build-host
@@ -37,3 +37,15 @@ clean:
 # Run an example script
 run-example: build
 	cargo run --release --bin sandcastle -- run examples/hello.js
+
+# Publish TypeScript SDK to npm (bumps patch version automatically)
+# Usage: make publish-sdk [V=minor|major|patch]
+publish-sdk:
+	@cd sdk/typescript && \
+		bun install --frozen-lockfile && \
+		bun run build && \
+		npm version $(or $(V),patch) --no-git-tag-version && \
+		echo "//registry.npmjs.org/:_authToken=$${NPM_TOKEN}" > .npmrc && \
+		npm publish --access public --ignore-scripts && \
+		rm -f .npmrc && \
+		echo "Published $$(node -p "require('./package.json').name + '@' + require('./package.json').version")"
