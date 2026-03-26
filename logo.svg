@@ -1,78 +1,109 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="sand" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#F4C769"/>
-      <stop offset="100%" stop-color="#D4A03C"/>
-    </linearGradient>
-    <linearGradient id="tower" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#F7D88A"/>
-      <stop offset="100%" stop-color="#D4A03C"/>
-    </linearGradient>
-    <linearGradient id="glow" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#6EE7B7"/>
-      <stop offset="100%" stop-color="#34D399"/>
-    </linearGradient>
+    <!-- Rough pencil-like filter -->
+    <filter id="rough" x="-2%" y="-2%" width="104%" height="104%">
+      <feTurbulence type="turbulence" baseFrequency="0.03" numOctaves="4" result="noise" seed="2"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="roughText" x="-2%" y="-2%" width="104%" height="104%">
+      <feTurbulence type="turbulence" baseFrequency="0.04" numOctaves="3" result="noise" seed="5"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
   </defs>
 
-  <!-- Base / ground -->
-  <ellipse cx="256" cy="400" rx="200" ry="35" fill="#E8B94A" opacity="0.4"/>
+  <g filter="url(#rough)">
+    <!-- Sand mound base -->
+    <path d="M 62 395 Q 120 370 180 378 Q 256 360 332 378 Q 400 370 450 395 Q 460 415 440 420 Q 350 440 256 435 Q 160 440 72 420 Q 52 415 62 395 Z"
+          fill="#F4C769" stroke="#C4943A" stroke-width="2"/>
 
-  <!-- Castle base wall -->
-  <rect x="136" y="280" width="240" height="120" rx="6" fill="url(#sand)"/>
+    <!-- Castle base wall - wobbly -->
+    <path d="M 142 290 L 140 388 Q 256 395 372 388 L 370 290 Z"
+          fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
 
-  <!-- Battlements on base wall -->
-  <rect x="136" y="265" width="35" height="25" rx="3" fill="url(#tower)"/>
-  <rect x="196" y="265" width="35" height="25" rx="3" fill="url(#tower)"/>
-  <rect x="256" y="265" width="35" height="25" rx="3" fill="url(#tower)"/>
-  <rect x="316" y="265" width="35" height="25" rx="3" fill="url(#tower)"/>
+    <!-- Base wall battlements - uneven -->
+    <path d="M 138 290 L 138 272 L 170 270 L 170 290" fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 195 290 L 194 274 L 228 272 L 228 290" fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 284 290 L 283 273 L 318 271 L 317 290" fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 342 290 L 341 271 L 374 273 L 373 290" fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
 
-  <!-- Left tower -->
-  <rect x="120" y="180" width="60" height="220" rx="5" fill="url(#tower)"/>
-  <rect x="115" y="165" width="70" height="22" rx="3" fill="url(#sand)"/>
-  <!-- Left tower battlement -->
-  <rect x="115" y="148" width="18" height="22" rx="2" fill="url(#tower)"/>
-  <rect x="141" y="148" width="18" height="22" rx="2" fill="url(#tower)"/>
-  <rect x="167" y="148" width="18" height="22" rx="2" fill="url(#tower)"/>
+    <!-- Left tower - hand-drawn lines -->
+    <path d="M 118 185 L 122 392 L 178 390 L 182 185 Z"
+          fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Left tower top ledge -->
+    <path d="M 110 185 L 112 170 L 190 168 L 192 185 Z"
+          fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Left tower battlements -->
+    <path d="M 110 170 L 109 148 L 130 146 L 130 168" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 142 168 L 141 150 L 162 148 L 162 168" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 172 168 L 171 149 L 192 147 L 192 170" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Left tower flag -->
+    <line x1="151" y1="146" x2="151" y2="110" stroke="#C4943A" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 151 110 Q 166 116 160 124 Q 153 118 151 126" fill="#E85D4A" stroke="#C4943A" stroke-width="1.5"/>
 
-  <!-- Right tower -->
-  <rect x="332" y="180" width="60" height="220" rx="5" fill="url(#tower)"/>
-  <rect x="327" y="165" width="70" height="22" rx="3" fill="url(#sand)"/>
-  <!-- Right tower battlement -->
-  <rect x="327" y="148" width="18" height="22" rx="2" fill="url(#tower)"/>
-  <rect x="353" y="148" width="18" height="22" rx="2" fill="url(#tower)"/>
-  <rect x="379" y="148" width="18" height="22" rx="2" fill="url(#tower)"/>
+    <!-- Right tower -->
+    <path d="M 330 185 L 334 390 L 390 392 L 394 185 Z"
+          fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Right tower top ledge -->
+    <path d="M 322 185 L 324 170 L 402 168 L 404 185 Z"
+          fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Right tower battlements -->
+    <path d="M 322 170 L 321 149 L 342 147 L 342 168" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 354 168 L 353 150 L 374 148 L 374 168" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 384 168 L 383 148 L 404 146 L 404 170" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Right tower flag -->
+    <line x1="363" y1="146" x2="363" y2="110" stroke="#C4943A" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 363 110 Q 378 116 372 124 Q 365 118 363 126" fill="#5B9BD5" stroke="#C4943A" stroke-width="1.5"/>
 
-  <!-- Center tower (tallest) -->
-  <rect x="216" y="120" width="80" height="280" rx="5" fill="url(#tower)"/>
-  <rect x="210" y="102" width="92" height="25" rx="3" fill="url(#sand)"/>
-  <!-- Center tower battlements -->
-  <rect x="210" y="82" width="20" height="26" rx="2" fill="url(#tower)"/>
-  <rect x="240" y="82" width="20" height="26" rx="2" fill="url(#tower)"/>
-  <rect x="270" y="82" width="20" height="26" rx="2" fill="url(#tower)"/>
+    <!-- Center tower (tallest) -->
+    <path d="M 218 128 L 222 390 L 292 390 L 296 128 Z"
+          fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Center tower ledge -->
+    <path d="M 208 128 L 210 108 L 304 106 L 306 128 Z"
+          fill="#F0D080" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Center tower battlements -->
+    <path d="M 208 108 L 207 84 L 232 82 L 232 106" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 244 106 L 243 86 L 270 84 L 270 106" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 282 106 L 281 85 L 306 83 L 306 108" fill="#EDCC72" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Center flag -->
+    <line x1="257" y1="82" x2="257" y2="42" stroke="#C4943A" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 257 42 Q 278 50 270 62 Q 260 54 257 66" fill="#34D399" stroke="#C4943A" stroke-width="1.5"/>
 
-  <!-- Gate arch -->
-  <path d="M 230 400 L 230 340 A 26 26 0 0 1 282 340 L 282 400 Z" fill="#8B6914"/>
-  <path d="M 234 400 L 234 342 A 22 22 0 0 1 278 342 L 278 400 Z" fill="#6B4F10"/>
+    <!-- Gate arch - sketchy -->
+    <path d="M 232 392 L 234 338 Q 234 312 258 312 Q 282 312 280 338 L 282 392"
+          fill="#A07828" stroke="#C4943A" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M 238 392 L 239 342 Q 240 318 258 318 Q 276 318 275 342 L 276 392"
+          fill="#7A5A18" stroke="none"/>
 
-  <!-- WASM/code symbol in gate - terminal cursor -->
-  <rect x="247" y="355" width="18" height="3" rx="1" fill="#34D399"/>
-  <text x="249" y="378" font-family="monospace" font-size="14" font-weight="bold" fill="#34D399">&gt;_</text>
+    <!-- Terminal prompt in gate -->
+    <text x="248" y="362" font-family="monospace" font-size="18" font-weight="bold" fill="#34D399" opacity="0.9">&gt;_</text>
 
-  <!-- Glowing brackets on center tower - representing code/sandbox -->
-  <text x="232" y="220" font-family="monospace" font-size="36" font-weight="bold" fill="url(#glow)" opacity="0.9">{</text>
-  <text x="264" y="220" font-family="monospace" font-size="36" font-weight="bold" fill="url(#glow)" opacity="0.9">}</text>
+    <!-- Curly braces on center tower -->
+    <text x="228" y="225" font-family="monospace" font-size="40" font-weight="bold" fill="#34D399" opacity="0.85">{</text>
+    <text x="268" y="225" font-family="monospace" font-size="40" font-weight="bold" fill="#34D399" opacity="0.85">}</text>
 
-  <!-- Small windows on towers -->
-  <rect x="140" y="220" width="16" height="20" rx="8" fill="#8B6914" opacity="0.6"/>
-  <rect x="352" y="220" width="16" height="20" rx="8" fill="#8B6914" opacity="0.6"/>
-  <rect x="140" y="270" width="16" height="20" rx="8" fill="#8B6914" opacity="0.6"/>
-  <rect x="352" y="270" width="16" height="20" rx="8" fill="#8B6914" opacity="0.6"/>
+    <!-- Doodley windows - circles and arches -->
+    <ellipse cx="150" cy="225" rx="10" ry="12" fill="#A07828" stroke="#C4943A" stroke-width="1.5"/>
+    <ellipse cx="150" cy="278" rx="10" ry="12" fill="#A07828" stroke="#C4943A" stroke-width="1.5"/>
+    <ellipse cx="362" cy="225" rx="10" ry="12" fill="#A07828" stroke="#C4943A" stroke-width="1.5"/>
+    <ellipse cx="362" cy="278" rx="10" ry="12" fill="#A07828" stroke="#C4943A" stroke-width="1.5"/>
 
-  <!-- Subtle shield/lock icon on center tower -->
-  <path d="M 256 240 L 244 248 L 244 262 C 244 272 256 280 256 280 C 256 280 268 272 268 262 L 268 248 Z"
-        fill="none" stroke="#34D399" stroke-width="2.5" opacity="0.8"/>
-  <circle cx="256" cy="258" r="4" fill="#34D399" opacity="0.8"/>
+    <!-- Shield doodle on center tower -->
+    <path d="M 257 242 L 244 250 Q 243 268 257 280 Q 271 268 270 250 Z"
+          fill="none" stroke="#34D399" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="257" cy="261" r="4.5" fill="#34D399"/>
 
-  <!-- Text -->
-  <text x="256" y="448" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="42" font-weight="700" fill="#D4A03C" letter-spacing="4">SANDCASTLE</text>
+    <!-- Little sand texture lines -->
+    <line x1="90" y1="408" x2="110" y2="406" stroke="#C4943A" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+    <line x1="380" y1="410" x2="405" y2="407" stroke="#C4943A" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+    <line x1="200" y1="420" x2="225" y2="418" stroke="#C4943A" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+    <line x1="300" y1="418" x2="330" y2="420" stroke="#C4943A" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+    <line x1="130" y1="418" x2="155" y2="422" stroke="#C4943A" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+
+    <!-- Tiny seashell doodle -->
+    <path d="M 400 400 Q 406 392 412 400 Q 406 396 400 400 Z" fill="#C4943A" opacity="0.5"/>
+    <path d="M 96 410 Q 100 404 106 410 Q 100 406 96 410 Z" fill="#C4943A" opacity="0.5"/>
+  </g>
+
+  <!-- Text with slight roughness -->
+  <text filter="url(#roughText)" x="256" y="475" text-anchor="middle" font-family="'Segoe Print', 'Comic Sans MS', 'Bradley Hand', cursive" font-size="38" font-weight="700" fill="#C4943A" letter-spacing="3">SandCastle</text>
 </svg>
