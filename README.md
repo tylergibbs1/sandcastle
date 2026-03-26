@@ -180,6 +180,30 @@ curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
   -d '{"input": {"x": 41}}'
 ```
 
+### Deploy
+
+```bash
+# Docker (runs anywhere)
+docker build -t sandcastle .
+docker run -p 8080:8080 sandcastle
+
+# AWS ECS Fargate
+docker build -t sandcastle .
+aws ecr create-repository --repository-name sandcastle
+docker tag sandcastle:latest <account>.dkr.ecr.<region>.amazonaws.com/sandcastle:latest
+aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+docker push <account>.dkr.ecr.<region>.amazonaws.com/sandcastle:latest
+# Then create an ECS service pointing to the image
+
+# Fly.io (one command)
+fly launch --image sandcastle --internal-port 8080
+
+# Railway / Render
+# Just connect your repo — they auto-detect the Dockerfile
+```
+
+The Docker image is ~50MB and starts in <1 second. The server exposes all REST endpoints on port 8080.
+
 ## Features
 
 ### Core Runtime

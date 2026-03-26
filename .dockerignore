@@ -1,0 +1,7 @@
+target/
+guest/target/
+sdk/typescript/node_modules/
+sdk/typescript/dist/
+.git/
+*.md
+!README.md
