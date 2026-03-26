@@ -16,7 +16,7 @@ Benchmarked (Apple Silicon, release mode):
   1000 concurrent:      105ms total (105µs per sandbox)
   Sustained throughput: 1,700 ops/sec (stable over 5s)
   Peak memory:          ~1.3MB per sandbox
-  Guest WASM module:    ~857KB
+  Guest WASM module:    ~852KB
   Tail latency (p99):   671µs (p99/p50 = 1.08x)
 ```
 
@@ -30,7 +30,7 @@ AI agents need to run code. The options are containers (slow), V8 isolates (heav
 | E2B | ~100-200ms | ~512MB min | Hosted / KVM | Full Node.js | Firecracker |
 | V8 isolate (self-hosted) | ~3-5ms | ~5MB | ~50MB (V8 lib) | Full ES2024+ | V8 isolate boundary |
 | Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | Full ES2024+ | V8 isolates |
-| **SandCastle** | **<1ms** | **~1.3MB** | **~857KB WASM** | **ES2023 + polyfills** | **WASM spec boundary** |
+| **SandCastle** | **<1ms** | **~1.3MB** | **~852KB WASM** | **ES2024+ (QuickJS-NG)** | **WASM spec boundary** |
 
 ### Containers vs SandCastle
 
@@ -40,10 +40,11 @@ Containers boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms star
 
 V8 isolates are the closest alternative — they're in-process and don't need containers. The tradeoffs:
 
-- **V8 wins on JS compatibility** — full ES2024+, Web APIs, JIT compilation for compute-heavy workloads
-- **SandCastle wins on startup** (0.6ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (857KB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
+- **V8 wins on JIT performance** — faster for compute-heavy loops due to JIT compilation
+- **SandCastle wins on startup** (0.6ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (852KB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
+- **JS compatibility is now comparable** — SandCastle uses QuickJS-NG which supports ES2024+ including `Object.groupBy`, `Promise.withResolvers`, `Array.fromAsync`, `Set` methods, iterator helpers, and more
 
-If you need full Node.js compatibility or heavy compute, use V8. If you need fast, lightweight sandboxes for AI agent code — data transforms, API orchestration, JSON processing — SandCastle is purpose-built for that.
+If you need Node.js APIs or heavy compute (JIT matters), use V8. If you need fast, lightweight sandboxes for AI agent code — data transforms, API orchestration, JSON processing — SandCastle is purpose-built for that.
 
 ### How the sandbox works
 
