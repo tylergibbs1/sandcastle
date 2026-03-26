@@ -6,7 +6,7 @@
 
 <p align="center">Lightweight WASM-based sandbox runtime for AI agent code execution.</p>
 
-SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and <2MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS as the JavaScript engine.
+SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and <2MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS-NG (ES2024+) as the JavaScript engine.
 
 ```
                         Apple Silicon (M4)     AWS c7g.xlarge (Graviton3)
@@ -42,7 +42,7 @@ Containers boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms star
 V8 isolates are the closest alternative — they're in-process and don't need containers. The tradeoffs:
 
 - **V8 wins on JIT performance** — faster for compute-heavy loops due to JIT compilation
-- **SandCastle wins on startup** (0.6ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (852KB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
+- **SandCastle wins on startup** (0.6ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (868KB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
 - **JS compatibility is now comparable** — SandCastle uses QuickJS-NG which supports ES2024+ including `Object.groupBy`, `Promise.withResolvers`, `Array.fromAsync`, `Set` methods, iterator helpers, and more
 
 If you need Node.js APIs or heavy compute (JIT matters), use V8. If you need fast, lightweight sandboxes for AI agent code — data transforms, API orchestration, JSON processing — SandCastle is purpose-built for that.
@@ -67,10 +67,11 @@ This approach is validated by recent academic work:
 npm install -g @grayhaven/sandcastle
 
 # Or from source (any platform with Rust)
+git clone https://github.com/tylergibbs1/sandcastle.git && cd sandcastle
 cargo install --path crates/sandcastle-cli
 
 # Or Docker
-docker run -p 8080:8080 ghcr.io/tylergibbs1/sandcastle
+docker build -t sandcastle . && docker run -p 8080:8080 sandcastle
 ```
 
 ## Quick Start
@@ -150,6 +151,12 @@ const result = await sc.run<number>("return 1 + 1;");
 ```bash
 # Run a script
 sandcastle run script.js --input '{"name": "Alice"}'
+
+# Pipe from stdin
+echo 'return 1 + 1;' | sandcastle run -
+
+# With environment variables
+sandcastle run script.js -e API_KEY=sk-... -e DEBUG=true
 
 # Interactive REPL
 sandcastle repl
@@ -276,7 +283,7 @@ Code Mode replaces sequential tool calls with a single code execution. Instead o
 This is SandCastle's answer to [Cloudflare's Code Mode](https://blog.cloudflare.com/sandboxing-ai-agents-100x-faster/).
 
 ```typescript
-import { createCodeTool, TwoPassExecutor } from "sandcastle/codemode";
+import { createCodeTool, TwoPassExecutor } from "@grayhaven/sandcastle/codemode";
 
 const tools = [
   {
@@ -331,7 +338,7 @@ const tool = {
 };
 
 // Code Mode: LLM writes code that chains multiple tool calls
-import { createCodeTool, TwoPassExecutor } from "sandcastle/codemode";
+import { createCodeTool, TwoPassExecutor } from "@grayhaven/sandcastle/codemode";
 const codemode = createCodeTool({ tools: myTools, executor: new TwoPassExecutor() });
 // Give `codemode` to your LLM — it replaces all of `myTools` with a single tool
 ```
@@ -356,19 +363,20 @@ Host Application
 ## Building from Source
 
 ```bash
-# Prerequisites: Rust 1.82+, wasm32-wasip1 target
+# Prerequisites: Rust 1.85+, wasm32-wasip1 target
 rustup target add wasm32-wasip1
 
 # Build everything
 make build
 
 # Or step by step:
-cd guest && ./build.sh          # Build QuickJS WASM guest (~823KB)
+cd guest && ./build.sh          # Build QuickJS-NG WASM guest (~868KB)
 cargo build --release            # Build runtime + CLI
 
 # Run tests
-cargo test                       # 54 Rust tests
-cd sdk/typescript && bun test    # 118 TypeScript tests
+make test                        # 144 Rust tests
+make test-cli                    # 34 CLI integration tests
+cd sdk/typescript && bun test    # TypeScript + Code Mode tests
 
 # Run benchmarks
 cargo bench -p sandcastle
@@ -402,7 +410,7 @@ sandcastle/
 │   │   ├── core/                # Errors, subprocess, HTTP transport
 │   │   ├── types/               # Public type definitions
 │   │   └── guest/index.d.ts     # Guest-side type declarations
-│   └── test/                # 204 tests (unit + integration + agent)
+│   └── test/                # Unit, integration, and Code Mode agent tests
 ├── docs/                    # Architecture diagrams (Mermaid)
 └── examples/                # Example scripts
 ```

@@ -24,7 +24,7 @@ const result = await sc.run<number>("return 1 + 1;");
 
 ```typescript
 const result = await sc.run<string>(
-  'const i = globalThis.__sandcastle_input; return "Hello " + i.name;',
+  'return "Hello " + input.name;',
   { name: "World" }
 );
 // result === "Hello World"
@@ -50,7 +50,7 @@ import type {} from "@grayhaven/sandcastle/guest";
 
 ## Requirements
 
-The `sandcastle` CLI must be installed and in your PATH. See the [main repo](https://github.com/tylergibbs1/sandcastle) for installation instructions.
+The `sandcastle` CLI is downloaded automatically on macOS/Linux via postinstall. On other platforms, [install from source](https://github.com/tylergibbs1/sandcastle#install).
 
 ## What works out of the box
 
@@ -83,7 +83,7 @@ const key = process.env.API_KEY;      // Injected by host via .with_env()
 - Polyfills: TextEncoder/TextDecoder, URL, atob/btoa, crypto, setTimeout, structuredClone, performance.now
 - Memory protection: `MemoryExceeded` status instead of opaque WASM traps
 - LLM-friendly errors: `require('express')` explains alternatives instead of crashing
-- 140 integration tests, 85 experiments
+- 144 integration tests + 34 CLI tests + 85 Rust experiments + 101 Code Mode experiments
 
 ## License
 
