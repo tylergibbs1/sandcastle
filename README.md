@@ -6,12 +6,16 @@
 
 <p align="center">Lightweight WASM-based sandbox runtime for AI agent code execution.</p>
 
-SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-5ms cold starts and <8MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS as the JavaScript engine.
+SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and <2MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS as the JavaScript engine.
 
 ```
-Sandbox creation:  <1ms p50, <5ms p99
-Memory per sandbox: <8MB baseline
-Guest WASM module:  ~823KB
+Benchmarked (Apple Silicon, release mode):
+  Sandbox creation:     610µs per op (1,638 ops/sec)
+  Simple expression:    606µs per op (1,648 ops/sec)
+  JSON processing:      1.78ms per op (100 items filter+map)
+  500 concurrent:       55ms total (110µs per sandbox)
+  Peak memory:          ~1.3MB per sandbox
+  Guest WASM module:    ~823KB
 ```
 
 ## Why
@@ -23,9 +27,17 @@ AI agents need to run code. The alternatives are slow (Docker ~500ms), platform-
 | Docker | ~500ms | ~100MB+ | Yes | Namespace isolation |
 | Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | V8 isolates |
 | E2B | ~500ms | ~100MB+ | Hosted only | Firecracker |
-| **SandCastle** | **<5ms** | **<8MB** | **Anywhere** | **WASM sandbox** |
+| **SandCastle** | **<1ms** | **~1.3MB** | **Anywhere** | **WASM sandbox** |
 
 ## Quick Start
+
+### Scaffold a new project
+
+```bash
+sandcastle init my-project
+cd my-project
+sandcastle run scripts/hello.js --input '{"name": "Alice"}'
+```
 
 ### Rust (library mode)
 
@@ -40,7 +52,7 @@ let result = runtime.execute(
     ExecutionRequest::new("return 1 + 1;")
 ).await?;
 
-assert_eq!(result.output, OutputValue::Json(serde_json::json!(2)));
+println!("{:?}", result.output); // Json(2)
 ```
 
 ### TypeScript SDK
@@ -60,13 +72,21 @@ const result = await sc.run<number>("return 1 + 1;");
 ### CLI
 
 ```bash
+# Run a script
 sandcastle run script.js --input '{"name": "Alice"}'
+
+# Interactive REPL
+sandcastle repl
+
+# Generate TypeScript declarations from capability definitions
+sandcastle codegen capabilities.json -o types.d.ts
 ```
 
 ### HTTP Server
 
 ```bash
-sandcastle serve --http 0.0.0.0:8080
+# Start server with hot-reload from a scripts directory
+sandcastle serve --http 0.0.0.0:8080 --watch ./scripts
 
 # Execute code
 curl -X POST http://localhost:8080/execute \
@@ -82,57 +102,63 @@ curl -X POST http://localhost:8080/scripts \
 curl -X POST http://localhost:8080/dispatch/doubler \
   -H 'Content-Type: application/json' \
   -d '{"input": {"x": 21}}'
+
+# Multi-tenant namespaces
+curl -X POST http://localhost:8080/namespaces \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "tenant-abc"}'
+
+curl -X POST http://localhost:8080/namespaces/tenant-abc/scripts \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "worker", "code": "return globalThis.__sandcastle_input.x + 1"}'
+
+curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
+  -H 'Content-Type: application/json' \
+  -d '{"input": {"x": 41}}'
 ```
 
 ## Features
 
 ### Core Runtime
-- **Sub-millisecond sandbox creation** via Wasmtime AOT compilation
+- **Sub-millisecond sandbox creation** — 610µs benchmarked via Wasmtime AOT compilation
 - **Fuel metering** — cap instruction count per execution
 - **Epoch-based timeouts** — wall-clock deadline enforcement
-- **Memory limits** — per-sandbox memory caps
-- **Execution transcripts** — structured logs of every execution with console output, capability calls, fuel/memory usage
+- **Memory limits** — per-sandbox memory caps enforced by Wasmtime
+- **Execution transcripts** — structured logs with console output, capability calls, fuel/memory usage
+- **Better error messages** — JS errors surface the actual error text, not just "error code 1"
 
 ### Host Capabilities
 - **Typed capability bridge** — expose host APIs to sandboxed code with quota enforcement
 - **Built-in KV store** — in-memory key-value storage (`DashMap`-backed)
 - **Built-in HTTP client** — real `reqwest`-backed HTTP with domain allowlists
-- **Per-capability quotas** — max calls, payload size, transfer limits, concurrency caps
+- **Per-capability quotas** — max calls, payload size, transfer limits, concurrency caps (atomic compare-exchange, no TOCTOU races)
 
 ### Multi-Tenant Dispatch
 - **Script registry** — pre-register named scripts, dispatch by name
-- **Dispatch namespaces** — Cloudflare-style multi-tenant isolation
+- **Dispatch namespaces** — Cloudflare Workers for Platforms-style multi-tenant isolation
 - **Per-namespace concurrency** — independent resource limits per tenant
+- **Hot reload** — `--watch` flag auto-registers scripts on file changes
+
+### Code Mode
+- **Replace N tool calls with 1 code execution** — up to 80% token reduction
+- **`createCodeTool()`** — converts tool definitions into a single LLM tool
+- **`TwoPassExecutor`** — collect tool calls in sandbox, execute host-side, replay with results
+- **`generateTypes()`** — auto-generate TypeScript declarations from tool schemas for LLM context
 
 ### TypeScript SDK
-- **ESM-first**, zero runtime dependencies
+- **ESM-first**, zero runtime dependencies, Bun toolchain
 - **Typed errors** — `TimeoutError`, `GuestError`, `FuelExhaustedError`, etc.
 - **Subprocess + HTTP modes** — spawn CLI or talk to server
 - **Namespace client** — `sc.namespace("tenant").dispatch("worker", input)`
 - **Guest type declarations** — feed to your LLM so it knows the sandbox API
 
-## Architecture
-
-```
-Host Application
-  │
-  ├── SandCastle Runtime (Wasmtime engine, AOT-compiled module)
-  │     │
-  │     ├── Sandbox (Wasmtime Store + QuickJS WASM)
-  │     │     ├── Guest JS code (interpreted by QuickJS)
-  │     │     ├── Host capability bridge (MessagePack RPC)
-  │     │     └── Virtual filesystem (input/output artifacts)
-  │     │
-  │     ├── Script Registry (named, pre-compiled scripts)
-  │     └── Dispatch Namespaces (multi-tenant isolation)
-  │
-  ├── Host Capabilities
-  │     ├── KV Store (DashMap)
-  │     ├── HTTP Client (reqwest)
-  │     └── Custom (implement the Capability trait)
-  │
-  └── HTTP Server (axum) or CLI or Library embed
-```
+### CLI
+- **`sandcastle run`** — execute a script
+- **`sandcastle serve`** — HTTP server with REST API + hot reload
+- **`sandcastle init`** — scaffold a new project
+- **`sandcastle repl`** — interactive JS REPL with multi-line support
+- **`sandcastle codegen`** — generate TypeScript declarations from capability definitions
+- **`sandcastle info`** — print runtime info
 
 ## Code Mode
 
@@ -143,7 +169,6 @@ This is SandCastle's answer to [Cloudflare's Code Mode](https://blog.cloudflare.
 ```typescript
 import { createCodeTool, TwoPassExecutor } from "sandcastle/codemode";
 
-// 1. Define your tools
 const tools = [
   {
     name: "getUser",
@@ -159,11 +184,10 @@ const tools = [
   },
 ];
 
-// 2. Create the code tool
 const executor = new TwoPassExecutor();
 const codemode = createCodeTool({ tools, executor });
 
-// 3. Give it to your LLM as a single tool
+// Give `codemode` to your LLM as a single tool.
 // Claude writes code like:
 //   async () => {
 //     const user = await codemode.getUser({ id: 42 });
@@ -172,10 +196,10 @@ const codemode = createCodeTool({ tools, executor });
 //   }
 ```
 
-The `TwoPassExecutor` works with SandCastle's subprocess mode:
-1. **Pass 1**: Run the code in a sandbox, collect all `codemode.*` tool calls
-2. **Pass 2**: Execute tool calls host-side with real implementations
-3. **Pass 3**: Re-run with results pre-populated so the code completes
+**How the TwoPassExecutor works:**
+1. **Pass 1**: Run the code in a sandbox with a collector proxy — `codemode.*` calls are recorded
+2. **Pass 2**: Execute recorded tool calls host-side with real implementations
+3. **Pass 3**: Re-run the code with results pre-populated so it completes
 
 ## Using with AI Agents
 
@@ -203,7 +227,22 @@ const codemode = createCodeTool({ tools: myTools, executor: new TwoPassExecutor(
 // Give `codemode` to your LLM — it replaces all of `myTools` with a single tool
 ```
 
-Feed the guest type declarations (`sandcastle/guest`) to your LLM so it knows what APIs are available inside the sandbox.
+## Architecture
+
+See [`docs/architecture.md`](docs/architecture.md) for detailed Mermaid diagrams.
+
+```
+Host Application
+  │
+  ├── SandCastle Runtime (Wasmtime engine, AOT-compiled module)
+  │     ├── Sandbox (Wasmtime Store + QuickJS WASM)
+  │     ├── Script Registry (named, pre-compiled scripts)
+  │     └── Dispatch Namespaces (multi-tenant isolation)
+  │
+  ├── Host Capabilities (KV, HTTP, custom)
+  │
+  └── Delivery: Library | CLI | HTTP Server
+```
 
 ## Building from Source
 
@@ -219,8 +258,11 @@ cd guest && ./build.sh          # Build QuickJS WASM guest (~823KB)
 cargo build --release            # Build runtime + CLI
 
 # Run tests
-cargo test                       # 52 Rust tests
-cd sdk/typescript && bun test    # 146 TypeScript tests
+cargo test                       # 94 Rust tests
+cd sdk/typescript && bun test    # 204 TypeScript tests
+
+# Run benchmarks
+cargo bench -p sandcastle
 ```
 
 ## Project Structure
@@ -241,20 +283,19 @@ sandcastle/
 │   │       ├── limits.rs        # Resource limit types
 │   │       ├── types.rs         # Shared types
 │   │       └── error.rs         # Error hierarchy
-│   ├── sandcastle-cli/      # CLI binary + HTTP server
+│   ├── sandcastle-cli/      # CLI (run, serve, init, repl, codegen)
 │   └── sandcastle-macros/   # #[sandcastle::capability] proc macro
 ├── guest/                   # QuickJS WASM guest runtime
 ├── sdk/typescript/          # TypeScript SDK
 │   ├── src/
 │   │   ├── client.ts            # SandCastle class
-│   │   ├── core/errors.ts       # Typed error hierarchy
-│   │   ├── core/subprocess.ts   # CLI transport
-│   │   ├── core/http.ts         # HTTP transport
+│   │   ├── codemode/            # Code Mode SDK
+│   │   ├── core/                # Errors, subprocess, HTTP transport
 │   │   ├── types/               # Public type definitions
 │   │   └── guest/index.d.ts     # Guest-side type declarations
-│   └── test/                # 115 tests (unit + integration + agent)
+│   └── test/                # 204 tests (unit + integration + agent)
+├── docs/                    # Architecture diagrams (Mermaid)
 ├── proto/                   # gRPC protobuf definitions
-├── benches/                 # Benchmark suite
 └── examples/                # Example scripts
 ```
 
@@ -267,6 +308,7 @@ The sandbox boundary exists between untrusted guest code and the trusted host. G
 - **Instruction limits** — fuel metering prevents infinite loops
 - **Memory limits** — per-sandbox memory caps enforced by Wasmtime
 - **Wall-clock timeouts** — epoch-based interruption
+- **Input validation** — all guest-to-host parameters validated and capped at 16MB
 
 ## License
 
