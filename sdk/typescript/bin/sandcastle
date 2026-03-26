@@ -14,15 +14,11 @@ if (existsSync(localBin)) {
   }
 }
 
-// Fall through to PATH
-try {
-  execFileSync("sandcastle", process.argv.slice(2), { stdio: "inherit" });
-} catch (e) {
-  if (e.code === "ENOENT") {
-    console.error("sandcastle: binary not found.");
-    console.error("Install from source: cargo install --path crates/sandcastle-cli");
-    console.error("Or download from: https://github.com/tylergibbs1/sandcastle/releases");
-    process.exit(1);
-  }
-  process.exit(e.status || 1);
-}
+// No local binary — do NOT exec "sandcastle" here as it would
+// recurse back to this wrapper via npm's PATH shim.
+console.error("sandcastle: binary not found.");
+console.error("");
+console.error("The postinstall download may have been skipped. Install manually:");
+console.error("  cargo install --path crates/sandcastle-cli");
+console.error("  # or download from: https://github.com/tylergibbs1/sandcastle/releases");
+process.exit(1);
