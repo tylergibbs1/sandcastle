@@ -9,6 +9,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./codemode": {
+      "types": "./dist/codemode/index.d.ts",
+      "import": "./dist/codemode/index.js"
+    },
     "./guest": {
       "types": "./src/guest/index.d.ts"
     }
@@ -21,7 +25,7 @@
   ],
   "scripts": {
     "build": "bun run build:js && bun run build:types",
-    "build:js": "bun build ./src/index.ts --outdir ./dist --target node --format esm",
+    "build:js": "bun build ./src/index.ts ./src/codemode/index.ts --outdir ./dist --target node --format esm",
     "build:types": "tsc -p tsconfig.build.json",
     "check": "biome check && tsc --noEmit",
     "lint": "biome check src/ test/",

@@ -1,6 +1,10 @@
-# SandCastle
+<p align="center">
+  <img src="logo.svg" alt="SandCastle" width="200" />
+</p>
 
-Lightweight WASM-based sandbox runtime for AI agent code execution.
+<h1 align="center">SandCastle</h1>
+
+<p align="center">Lightweight WASM-based sandbox runtime for AI agent code execution.</p>
 
 SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-5ms cold starts and <8MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS as the JavaScript engine.
 
@@ -130,16 +134,59 @@ Host Application
   └── HTTP Server (axum) or CLI or Library embed
 ```
 
+## Code Mode
+
+Code Mode replaces sequential tool calls with a single code execution. Instead of the LLM making N separate `tool_use` calls (N round-trips), it writes one function that chains all N calls — cutting token usage by up to 80%.
+
+This is SandCastle's answer to [Cloudflare's Code Mode](https://blog.cloudflare.com/sandboxing-ai-agents-100x-faster/).
+
+```typescript
+import { createCodeTool, TwoPassExecutor } from "sandcastle/codemode";
+
+// 1. Define your tools
+const tools = [
+  {
+    name: "getUser",
+    description: "Get user by ID",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+    execute: async ({ id }) => db.getUser(id),
+  },
+  {
+    name: "sendEmail",
+    description: "Send an email",
+    inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } }, required: ["to", "body"] },
+    execute: async (input) => mailer.send(input),
+  },
+];
+
+// 2. Create the code tool
+const executor = new TwoPassExecutor();
+const codemode = createCodeTool({ tools, executor });
+
+// 3. Give it to your LLM as a single tool
+// Claude writes code like:
+//   async () => {
+//     const user = await codemode.getUser({ id: 42 });
+//     await codemode.sendEmail({ to: user.email, body: "Hello!" });
+//     return { sent: true };
+//   }
+```
+
+The `TwoPassExecutor` works with SandCastle's subprocess mode:
+1. **Pass 1**: Run the code in a sandbox, collect all `codemode.*` tool calls
+2. **Pass 2**: Execute tool calls host-side with real implementations
+3. **Pass 3**: Re-run with results pre-populated so the code completes
+
 ## Using with AI Agents
 
-SandCastle is designed to be a tool in an AI agent's toolkit. Give Claude (or any LLM) the `run_code` tool and it can write + execute JavaScript to solve tasks:
+SandCastle is designed to be a tool in an AI agent's toolkit:
 
 ```typescript
 import { SandCastle } from "sandcastle";
 
 const sandbox = new SandCastle();
 
-// Define as a tool for your agent framework
+// Simple mode: LLM writes + executes code directly
 const tool = {
   name: "run_code",
   description: "Execute JavaScript in a secure sandbox",
@@ -149,6 +196,11 @@ const tool = {
     return `Error: ${result.status.message}`;
   },
 };
+
+// Code Mode: LLM writes code that chains multiple tool calls
+import { createCodeTool, TwoPassExecutor } from "sandcastle/codemode";
+const codemode = createCodeTool({ tools: myTools, executor: new TwoPassExecutor() });
+// Give `codemode` to your LLM — it replaces all of `myTools` with a single tool
 ```
 
 Feed the guest type declarations (`sandcastle/guest`) to your LLM so it knows what APIs are available inside the sandbox.
@@ -168,7 +220,7 @@ cargo build --release            # Build runtime + CLI
 
 # Run tests
 cargo test                       # 52 Rust tests
-cd sdk/typescript && bun test    # 115 TypeScript tests
+cd sdk/typescript && bun test    # 146 TypeScript tests
 ```
 
 ## Project Structure
