@@ -202,7 +202,7 @@ fly launch --image sandcastle --internal-port 8080
 # Just connect your repo — they auto-detect the Dockerfile
 ```
 
-The Docker image is ~50MB and starts in <1 second. The server exposes all REST endpoints on port 8080.
+The Docker image is ~120MB and starts in <1 second. The server exposes all REST endpoints on port 8080.
 
 ## Features
 

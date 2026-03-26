@@ -6,6 +6,10 @@
 # --- Build stage ---
 FROM rust:1.93-bookworm AS builder
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang libclang-dev cmake \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN rustup target add wasm32-wasip1
 
 WORKDIR /build
