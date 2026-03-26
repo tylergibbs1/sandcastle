@@ -81,6 +81,9 @@ pub struct ExecutionRequest {
     /// Optional streaming callback for console output.
     /// Called in real-time as guest code writes to console.log/warn/error/debug.
     pub on_console: Option<ConsoleCallback>,
+    /// Environment variables injected into `process.env` inside the sandbox.
+    /// Use this to pass API keys, configuration, and secrets securely.
+    pub env: std::collections::HashMap<String, String>,
 }
 
 impl ExecutionRequest {
@@ -92,6 +95,7 @@ impl ExecutionRequest {
             limits: Limits::default(),
             input_artifacts: vec![],
             on_console: None,
+            env: std::collections::HashMap::new(),
         }
     }
 
@@ -120,6 +124,25 @@ impl ExecutionRequest {
     /// `console.log()`, `console.warn()`, `console.error()`, or `console.debug()`.
     pub fn with_console_callback(mut self, cb: impl Fn(ConsoleLevel, &str) + Send + Sync + 'static) -> Self {
         self.on_console = Some(Arc::new(cb));
+        self
+    }
+
+    /// Inject environment variables into the sandbox's `process.env`.
+    /// Use this to pass API keys and configuration securely.
+    ///
+    /// ```ignore
+    /// ExecutionRequest::new("return process.env.API_KEY;")
+    ///     .with_env("API_KEY", "sk-...")
+    ///     .with_env("DEBUG", "true")
+    /// ```
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
+    }
+
+    /// Inject multiple environment variables at once.
+    pub fn with_env_map(mut self, env: std::collections::HashMap<String, String>) -> Self {
+        self.env.extend(env);
         self
     }
 }
@@ -220,7 +243,25 @@ impl Sandbox {
             output: OutputValue::Null,
             output_artifacts: Vec::new(),
             input_artifacts: request.input_artifacts,
-            input_json: request.input,
+            input_json: {
+                // Embed env vars into the input so the guest can populate process.env
+                let mut input = request.input;
+                if !request.env.is_empty() {
+                    let env_obj: serde_json::Value = request.env.into_iter()
+                        .map(|(k, v)| (k, serde_json::Value::String(v)))
+                        .collect::<serde_json::Map<String, serde_json::Value>>()
+                        .into();
+                    if let Some(obj) = input.as_object_mut() {
+                        obj.insert("__sandcastle_env".to_string(), env_obj);
+                    } else {
+                        input = serde_json::json!({
+                            "__sandcastle_env": env_obj,
+                            "__sandcastle_original_input": input,
+                        });
+                    }
+                }
+                input
+            },
             start_time: Instant::now(),
             cancelled: Arc::new(AtomicBool::new(false)),
             recorder,

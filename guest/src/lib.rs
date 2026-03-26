@@ -707,6 +707,16 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
             r#"
             globalThis.__sandcastle_input = {input_json};
 
+            // Extract injected env vars into process.env, then clean up
+            if (globalThis.__sandcastle_input && globalThis.__sandcastle_input.__sandcastle_env) {{
+                Object.assign(globalThis.process.env, globalThis.__sandcastle_input.__sandcastle_env);
+                delete globalThis.__sandcastle_input.__sandcastle_env;
+                // If input was wrapped due to non-object original, unwrap it
+                if ('__sandcastle_original_input' in globalThis.__sandcastle_input) {{
+                    globalThis.__sandcastle_input = globalThis.__sandcastle_input.__sandcastle_original_input;
+                }}
+            }}
+
             // Shorthand: `input` is available directly in user code
             globalThis.input = globalThis.__sandcastle_input;
 
