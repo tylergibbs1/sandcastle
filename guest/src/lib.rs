@@ -278,22 +278,36 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
         // Inject `__sandcastle_input` global
         let input_json = serde_json::to_string(input).unwrap_or_else(|_| "null".to_string());
 
-        // Set up console object
+        // Set up console object with pretty-printing for objects
         let setup = r#"
-            globalThis.console = {
-                log: function(...args) {
-                    globalThis.__sandcastle_console_log(0, args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
-                },
-                warn: function(...args) {
-                    globalThis.__sandcastle_console_log(1, args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
-                },
-                error: function(...args) {
-                    globalThis.__sandcastle_console_log(2, args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
-                },
-                debug: function(...args) {
-                    globalThis.__sandcastle_console_log(3, args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
+            globalThis.console = (function() {
+                function fmt(v, depth) {
+                    if (depth === undefined) depth = 2;
+                    if (v === null) return 'null';
+                    if (v === undefined) return 'undefined';
+                    if (typeof v === 'string') return v;
+                    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+                    if (typeof v === 'symbol') return v.toString();
+                    if (typeof v === 'function') return '[Function: ' + (v.name || 'anonymous') + ']';
+                    if (v instanceof Error) return v.stack || (v.name + ': ' + v.message);
+                    if (depth <= 0) return Array.isArray(v) ? '[Array]' : '[Object]';
+                    try {
+                        if (Array.isArray(v)) return '[ ' + v.map(x => fmt(x, depth - 1)).join(', ') + ' ]';
+                        const keys = Object.keys(v);
+                        if (keys.length === 0) return '{}';
+                        return '{ ' + keys.map(k => k + ': ' + fmt(v[k], depth - 1)).join(', ') + ' }';
+                    } catch(e) { return String(v); }
                 }
-            };
+                function log(level, args) {
+                    globalThis.__sandcastle_console_log(level, args.map(a => fmt(a)).join(' '));
+                }
+                return {
+                    log: function(...args) { log(0, args); },
+                    warn: function(...args) { log(1, args); },
+                    error: function(...args) { log(2, args); },
+                    debug: function(...args) { log(3, args); }
+                };
+            })();
         "#;
 
         ctx.eval::<(), _>(setup)
@@ -438,6 +452,74 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
                     }
                 };
             }
+
+            // --- setTimeout / setInterval (synchronous stubs) ---
+            // These run the callback immediately (no actual delay) since WASM
+            // execution is single-threaded with no event loop. This matches
+            // what LLMs expect — the code "works" without hanging.
+            if (typeof globalThis.setTimeout === 'undefined') {
+                let _nextId = 1;
+                globalThis.setTimeout = function(fn, _delay, ...args) {
+                    const id = _nextId++;
+                    if (typeof fn === 'function') fn(...args);
+                    return id;
+                };
+                globalThis.clearTimeout = function(_id) {};
+                globalThis.setInterval = function(fn, _delay, ...args) {
+                    // Run once only — no infinite loop in sandbox
+                    const id = _nextId++;
+                    if (typeof fn === 'function') fn(...args);
+                    return id;
+                };
+                globalThis.clearInterval = function(_id) {};
+            }
+
+            // --- structuredClone ---
+            if (typeof globalThis.structuredClone === 'undefined') {
+                globalThis.structuredClone = function(value) {
+                    return JSON.parse(JSON.stringify(value));
+                };
+            }
+
+            // --- performance.now ---
+            if (typeof globalThis.performance === 'undefined') {
+                const _perfStart = Date.now();
+                globalThis.performance = {
+                    now() { return Date.now() - _perfStart; },
+                    timeOrigin: Date.now()
+                };
+            }
+
+            // --- queueMicrotask ---
+            if (typeof globalThis.queueMicrotask === 'undefined') {
+                globalThis.queueMicrotask = function(fn) {
+                    Promise.resolve().then(fn);
+                };
+            }
+
+            // --- require / module stubs (clear error for Node.js patterns) ---
+            if (typeof globalThis.require === 'undefined') {
+                globalThis.require = function(mod) {
+                    throw new Error(
+                        "require('" + mod + "') is not available. " +
+                        "This is a SandCastle sandbox, not Node.js. " +
+                        "Use __sandcastle_host_call() for host APIs, " +
+                        "or globalThis.__sandcastle_fs for file operations."
+                    );
+                };
+                globalThis.module = { exports: {} };
+                globalThis.exports = globalThis.module.exports;
+            }
+
+            // --- process stub (LLMs often check process.env) ---
+            if (typeof globalThis.process === 'undefined') {
+                globalThis.process = {
+                    env: {},
+                    version: 'v0.0.0-sandcastle',
+                    platform: 'wasm',
+                    exit() { throw new Error("process.exit() is not available in sandbox"); }
+                };
+            }
         "#;
 
         ctx.eval::<(), _>(polyfills)
@@ -498,6 +580,9 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
             r#"
             globalThis.__sandcastle_input = {input_json};
 
+            // Shorthand: `input` is available directly in user code
+            globalThis.input = globalThis.__sandcastle_input;
+
             // Create the host:api import bridge
             globalThis.__sandcastle_modules = {{}};
 
@@ -530,6 +615,43 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
                     const name = path.startsWith('/output/') ? path.slice(8) : path.startsWith('/') ? path.slice(1) : path;
                     return __sandcastle_write_artifact(name, typeof data === 'string' ? data : JSON.stringify(data));
                 }}
+            }};
+
+            // --- fetch() polyfill (delegates to HTTP capability) ---
+            globalThis.fetch = function(url, options) {{
+                options = options || {{}};
+                const method = (options.method || 'GET').toUpperCase();
+                const headers = options.headers || {{}};
+                const body = options.body || undefined;
+
+                const payload = {{ method, url: String(url), headers }};
+                if (body !== undefined) payload.body = String(body);
+
+                let resp;
+                try {{
+                    resp = JSON.parse(__sandcastle_host_call("http", "request", JSON.stringify(payload)));
+                }} catch(e) {{
+                    return Promise.reject(new TypeError("fetch failed: " + e));
+                }}
+
+                const responseBody = resp.body || '';
+                const responseHeaders = resp.headers || {{}};
+                const status = resp.status || 0;
+
+                return Promise.resolve({{
+                    ok: status >= 200 && status < 300,
+                    status: status,
+                    statusText: status === 200 ? 'OK' : String(status),
+                    headers: {{
+                        get(name) {{ return responseHeaders[name.toLowerCase()] || null; }},
+                        has(name) {{ return name.toLowerCase() in responseHeaders; }}
+                    }},
+                    url: String(url),
+                    text() {{ return Promise.resolve(responseBody); }},
+                    json() {{ return Promise.resolve(JSON.parse(responseBody)); }},
+                    blob() {{ return Promise.resolve(new Blob([responseBody])); }},
+                    clone() {{ return this; }}
+                }});
             }};
             "#
         );
@@ -567,7 +689,23 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
 
         let result: rquickjs::Value = ctx
             .eval(wrapped_code.as_str())
-            .map_err(|e| format!("JavaScript error: {e}"))?;
+            .map_err(|e| {
+                // Try to extract a useful error message from the JS exception
+                // instead of the generic "Exception generated by QuickJS"
+                let catch_result: Result<rquickjs::Value, _> = ctx.eval(
+                    "(function() { try { return null; } catch(e) { return e && e.stack ? e.stack : e && e.message ? e.name + ': ' + e.message : String(e); } })()"
+                );
+                if let Ok(val) = &catch_result {
+                    if let Some(s) = val.as_string() {
+                        if let Ok(msg) = s.to_string() {
+                            if msg != "null" && !msg.is_empty() {
+                                return format!("JavaScript error: {msg}");
+                            }
+                        }
+                    }
+                }
+                format!("JavaScript error: {e}")
+            })?;
 
         // Flush the microtask/Promise job queue so that Promise.resolve().then(...)
         // and async/await patterns complete before we capture the return value.
