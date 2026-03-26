@@ -31,6 +31,14 @@ AI agents need to run code. The alternatives are slow (Docker ~500ms), platform-
 | E2B | ~100-200ms | ~512MB min | Self-hostable (requires KVM) | Firecracker |
 | **SandCastle** | **<1ms** | **~1.3MB** | **Anywhere** | **WASM sandbox** |
 
+### Why WASM instead of containers?
+
+Containers (Docker, Firecracker) boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms startup and 100MB+ memory — fine for long-running services, but AI agents make 10-50 tool calls per conversation. At 500ms per sandbox, that's 5-25 seconds of waiting. At 600µs, it's 6-30ms.
+
+SandCastle uses **WebAssembly as the isolation layer**. The QuickJS JavaScript engine compiles to WASM and runs *inside* the sandbox. Guest code has zero access to the host — no filesystem, no network, no syscalls. Everything goes through explicit host function imports that you control and meter. The sandbox boundary is the WASM spec itself, which has been formally verified.
+
+The tradeoff: you get JavaScript, not a full Linux environment. But for AI agent code execution — data transforms, API orchestration, JSON processing — that's all you need.
+
 ## Quick Start
 
 ### Scaffold a new project
