@@ -54,13 +54,15 @@ The `sandcastle` CLI must be installed and in your PATH. See the [main repo](htt
 
 ## Features
 
-- Sub-millisecond sandbox creation (~600us)
+- Sub-millisecond sandbox creation (~600us, 1,700 ops/sec sustained)
 - Fuel metering, memory limits, wall-clock timeouts
-- Host capability bridge (KV, HTTP, custom)
+- Host capability bridge (KV, HTTP, custom) with quota enforcement
 - Input/output artifacts (virtual filesystem)
 - Execution transcripts with console output
-- Promise/async support
+- Promise/async support (`return Promise.all([...])` works)
 - Built-in polyfills: TextEncoder/TextDecoder, URL, atob/btoa, crypto
+- Memory protection: `MemoryExceeded` status instead of opaque WASM traps
+- 140 integration tests, 80 experiments
 
 ## License
 

@@ -10,12 +10,14 @@ SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with 
 
 ```
 Benchmarked (Apple Silicon, release mode):
-  Sandbox creation:     610µs per op (1,638 ops/sec)
-  Simple expression:    606µs per op (1,648 ops/sec)
-  JSON processing:      1.78ms per op (100 items filter+map)
-  500 concurrent:       55ms total (110µs per sandbox)
+  Sandbox creation:     600µs per op (1,670 ops/sec)
+  Simple expression:    600µs per op (1,670 ops/sec)
+  JSON processing:      1.5ms per op (100 items filter+map)
+  1000 concurrent:      105ms total (105µs per sandbox)
+  Sustained throughput: 1,700 ops/sec (stable over 5s)
   Peak memory:          ~1.3MB per sandbox
-  Guest WASM module:    ~823KB
+  Guest WASM module:    ~857KB
+  Tail latency (p99):   671µs (p99/p50 = 1.08x)
 ```
 
 ## Why
@@ -120,18 +122,21 @@ curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
 ## Features
 
 ### Core Runtime
-- **Sub-millisecond sandbox creation** — 610µs benchmarked via Wasmtime AOT compilation
-- **Fuel metering** — cap instruction count per execution
-- **Epoch-based timeouts** — wall-clock deadline enforcement
-- **Memory limits** — per-sandbox memory caps enforced by Wasmtime
+- **Sub-millisecond sandbox creation** — 600µs benchmarked via Wasmtime AOT compilation
+- **Fuel metering** — deterministic instruction count caps (identical fuel across runs)
+- **Epoch-based timeouts** — wall-clock deadline enforcement (~2ms precision)
+- **Memory protection** — `trap_on_grow_failure` + `MemoryExceeded` status (not opaque traps)
 - **Execution transcripts** — structured logs with console output, capability calls, fuel/memory usage
+- **Promise/async support** — `return Promise.resolve(42)` and `return asyncFn()` resolve correctly
+- **Web API polyfills** — `TextEncoder`/`TextDecoder`, `URL`/`URLSearchParams`, `atob`/`btoa`, `crypto.randomUUID`/`getRandomValues`
 - **Better error messages** — JS errors surface the actual error text, not just "error code 1"
 
 ### Host Capabilities
 - **Typed capability bridge** — expose host APIs to sandboxed code with quota enforcement
-- **Built-in KV store** — in-memory key-value storage (`DashMap`-backed)
-- **Built-in HTTP client** — real `reqwest`-backed HTTP with domain allowlists
-- **Per-capability quotas** — max calls, payload size, transfer limits, concurrency caps (atomic compare-exchange, no TOCTOU races)
+- **Built-in KV store** — in-memory key-value storage (`DashMap`-backed), shareable across sandboxes
+- **Built-in HTTP client** — real `reqwest`-backed HTTP with domain allowlists and response size caps
+- **Per-capability quotas** — max calls, payload size, transfer limits, concurrency caps (lock-free atomics)
+- **Quota enforcement throws JS exceptions** — guest code can't silently ignore quota exhaustion
 
 ### Multi-Tenant Dispatch
 - **Script registry** — pre-register named scripts, dispatch by name
@@ -145,9 +150,9 @@ curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
 - **`TwoPassExecutor`** — collect tool calls in sandbox, execute host-side, replay with results
 - **`generateTypes()`** — auto-generate TypeScript declarations from tool schemas for LLM context
 
-### TypeScript SDK
+### TypeScript SDK (`@grayhaven/sandcastle`)
 - **ESM-first**, zero runtime dependencies, Bun toolchain
-- **Typed errors** — `TimeoutError`, `GuestError`, `FuelExhaustedError`, etc.
+- **Typed errors** — `TimeoutError`, `GuestError`, `FuelExhaustedError`, `MemoryExceededError`
 - **Subprocess + HTTP modes** — spawn CLI or talk to server
 - **Namespace client** — `sc.namespace("tenant").dispatch("worker", input)`
 - **Guest type declarations** — feed to your LLM so it knows the sandbox API
