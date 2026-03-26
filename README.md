@@ -9,16 +9,17 @@
 SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and <2MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS as the JavaScript engine.
 
 ```
-Benchmarked (Apple Silicon, release mode):
-  Sandbox creation:     600µs per op (1,670 ops/sec)
-  Simple expression:    600µs per op (1,670 ops/sec)
-  JSON processing:      1.5ms per op (100 items filter+map)
-  1000 concurrent:      105ms total (105µs per sandbox)
-  Sustained throughput: 1,700 ops/sec (stable over 5s)
-  Peak memory:          ~1.3MB per sandbox
-  Guest WASM module:    ~852KB
-  Tail latency (p99):   671µs (p99/p50 = 1.08x)
+                        Apple Silicon (M4)     AWS c7g.xlarge (Graviton3)
+Sandbox creation:       600µs (1,700 ops/sec)  4.4ms (228 ops/sec)
+Simple expression:      600µs                  4.4ms
+JSON processing:        1.5ms (100 items)      5.8ms
+1000 concurrent:        105ms (105µs/sandbox)  1.2s (1.2ms/sandbox)
+1MB input:              13ms                   37ms
+Peak memory:            ~1.3MB per sandbox     ~1.3MB per sandbox
+Guest WASM module:      ~868KB                 ~868KB
 ```
+
+Still **100x faster than Docker** (~500ms) and **25x faster than E2B** (~100ms) even on the slowest platform.
 
 ## Why
 
@@ -30,7 +31,7 @@ AI agents need to run code. The options are containers (slow), V8 isolates (heav
 | E2B | ~100-200ms | ~512MB min | Hosted / KVM | Full Node.js | Firecracker |
 | V8 isolate (self-hosted) | ~3-5ms | ~5MB | ~50MB (V8 lib) | Full ES2024+ | V8 isolate boundary |
 | Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | Full ES2024+ | V8 isolates |
-| **SandCastle** | **<1ms** | **~1.3MB** | **~852KB WASM** | **ES2024+ (QuickJS-NG)** | **WASM spec boundary** |
+| **SandCastle** | **<1ms local, ~4ms cloud** | **~1.3MB** | **~868KB WASM** | **ES2024+ (QuickJS-NG)** | **WASM spec boundary** |
 
 ### Containers vs SandCastle
 
