@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+const { execFileSync } = require("child_process");
+const { existsSync } = require("fs");
+const { join } = require("path");
+
+// Check package-local binary (downloaded by postinstall)
+const localBin = join(__dirname, "..", ".sandcastle-bin", "sandcastle");
+if (existsSync(localBin)) {
+  try {
+    execFileSync(localBin, process.argv.slice(2), { stdio: "inherit" });
+    process.exit(0);
+  } catch (e) {
+    process.exit(e.status || 1);
+  }
+}
+
+// Fall through to PATH
+try {
+  execFileSync("sandcastle", process.argv.slice(2), { stdio: "inherit" });
+} catch (e) {
+  if (e.code === "ENOENT") {
+    console.error("sandcastle: binary not found.");
+    console.error("Install from source: cargo install --path crates/sandcastle-cli");
+    console.error("Or download from: https://github.com/tylergibbs1/sandcastle/releases");
+    process.exit(1);
+  }
+  process.exit(e.status || 1);
+}

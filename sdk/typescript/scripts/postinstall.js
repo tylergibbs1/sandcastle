@@ -16,13 +16,13 @@ const https = require("https");
 
 // Must match the repo where GitHub Releases are published
 const REPO = "tylergibbs1/sandcastle";
-const BIN_DIR = join(__dirname, "..", "bin");
+const BIN_DIR = join(__dirname, "..", ".sandcastle-bin");
 const BIN_PATH = join(BIN_DIR, process.platform === "win32" ? "sandcastle.exe" : "sandcastle");
 
 function getPlatformBinary() {
   const arch = process.arch === "arm64" ? "arm64" : "x64";
-  const platform = { darwin: "macos", linux: "linux", win32: "windows" }[process.platform];
-  if (!platform) return null;
+  const platform = { darwin: "macos", linux: "linux" }[process.platform];
+  if (!platform) return null; // Windows and other platforms: no pre-built binary
   return `sandcastle-${platform}-${arch}`;
 }
 
