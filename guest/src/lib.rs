@@ -199,6 +199,15 @@ pub extern "C" fn evaluate(
         }
         Err(e) => {
             console_log(2, &format!("Execution error: {e}"));
+            // Send structured error through set_output so the host can
+            // include the JS error message in GuestError.message
+            let error_json = serde_json::json!({
+                "__sandcastle_error": true,
+                "message": e.to_string()
+            });
+            if let Ok(bytes) = serde_json::to_vec(&error_json) {
+                set_output(&bytes);
+            }
             1
         }
     }

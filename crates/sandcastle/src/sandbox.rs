@@ -315,12 +315,42 @@ impl Sandbox {
                 let output = std::mem::replace(&mut store.data_mut().output, OutputValue::Null);
                 (ExecutionStatus::Success, output)
             }
-            Ok(code) => (
-                ExecutionStatus::GuestError {
-                    message: format!("guest returned error code: {code}"),
-                },
-                OutputValue::Null,
-            ),
+            Ok(_code) => {
+                // Extract the JS error message from the structured error output
+                // that the guest sets before returning a non-zero exit code.
+                let error_message = match &store.data().output {
+                    OutputValue::Json(v) => {
+                        if v.get("__sandcastle_error")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
+                            v.get("message")
+                                .and_then(|m| m.as_str())
+                                .map(|s| s.to_owned())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                // Fallback: scan console.error messages for the error
+                let message = error_message.unwrap_or_else(|| {
+                    store
+                        .data()
+                        .console_messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.level == ConsoleLevel::Error)
+                        .map(|m| m.message.clone())
+                        .unwrap_or_else(|| format!("guest returned error code: {_code}"))
+                });
+
+                (
+                    ExecutionStatus::GuestError { message },
+                    OutputValue::Null,
+                )
+            }
             Err(e) => {
                 if was_cancelled {
                     (ExecutionStatus::Timeout, OutputValue::Null)
