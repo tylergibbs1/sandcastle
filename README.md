@@ -63,10 +63,10 @@ This approach is validated by recent academic work:
 ## Install
 
 ```bash
-# npm (downloads pre-built binary automatically)
+# npm (downloads pre-built binary for macOS/Linux)
 npm install -g @grayhaven/sandcastle
 
-# Or from source
+# Or from source (any platform with Rust)
 cargo install --path crates/sandcastle-cli
 
 # Or Docker
