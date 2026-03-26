@@ -7,12 +7,20 @@ use sandcastle::runtime::{Config, SandCastle};
 use sandcastle::sandbox::ExecutionRequest;
 
 fn load_guest_module() -> Vec<u8> {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let candidates = [
-        "guest/target/wasm32-wasip1/release/sandcastle_guest_js.wasm",
-        "sandcastle-guest-js.wasm",
+        workspace_root
+            .join("guest/target/wasm32-wasip1/release/sandcastle_guest_js.wasm")
+            .to_string_lossy()
+            .to_string(),
+        "sandcastle-guest-js.wasm".to_string(),
     ];
     for path in &candidates {
-        if let Ok(bytes) = std::fs::read(path) {
+        if let Ok(bytes) = std::fs::read(&path) {
             return bytes;
         }
     }
@@ -80,9 +88,8 @@ fn bench_json_processing(runtime: &SandCastle, iterations: usize) -> Duration {
     start.elapsed()
 }
 
-fn bench_concurrent_sandboxes(runtime: &SandCastle, count: usize) -> Duration {
+fn bench_concurrent_sandboxes(runtime: Arc<SandCastle>, count: usize) -> Duration {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let runtime = Arc::new(runtime);
 
     let start = Instant::now();
 
@@ -107,7 +114,7 @@ fn bench_concurrent_sandboxes(runtime: &SandCastle, count: usize) -> Duration {
 fn main() {
     let guest_module = load_guest_module();
     let config = Config::new(guest_module);
-    let runtime = SandCastle::new(config).expect("Failed to create runtime");
+    let runtime = Arc::new(SandCastle::new(config).expect("Failed to create runtime"));
 
     println!("SandCastle Benchmark Suite");
     println!("=========================\n");
@@ -149,7 +156,7 @@ fn main() {
 
     // Concurrent sandboxes
     for count in [10, 100, 500] {
-        let elapsed = bench_concurrent_sandboxes(&runtime, count);
+        let elapsed = bench_concurrent_sandboxes(runtime.clone(), count);
         println!("Concurrent sandboxes ({count}):");
         println!("  Total: {elapsed:?}");
         println!(

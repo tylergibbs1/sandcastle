@@ -29,5 +29,9 @@ kv = ["dashmap"]
 http-client = ["reqwest", "url"]
 builtins = ["kv", "http-client"]
 
+[[bench]]
+name = "sandbox"
+harness = false
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
