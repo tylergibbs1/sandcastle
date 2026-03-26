@@ -2878,6 +2878,228 @@ async fn exp80_concurrent_kv_contention(runtime: Arc<SandCastle>) -> ExperimentR
 }
 
 // ============================================================================
+// ROUND 4: NEW FEATURES (81-85)
+// ============================================================================
+
+async fn exp81_streaming_console_callback(runtime: &SandCastle) -> ExperimentResult {
+    use std::sync::Mutex;
+
+    let captured: Arc<Mutex<Vec<(ConsoleLevel, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let cb_captured = captured.clone();
+
+    let code = r#"
+        console.log("step 1: starting");
+        console.warn("step 2: processing");
+        console.log("step 3: done");
+        return "complete";
+    "#;
+
+    let result = runtime
+        .execute(
+            ExecutionRequest::new(code)
+                .with_console_callback(move |level, msg| {
+                    cb_captured.lock().unwrap().push((level, msg.to_string()));
+                }),
+        )
+        .await
+        .unwrap();
+
+    let messages = captured.lock().unwrap();
+    let streamed_count = messages.len();
+    let has_step1 = messages.iter().any(|(_, m)| m.contains("step 1"));
+    let has_warn = messages.iter().any(|(l, _)| matches!(l, ConsoleLevel::Warn));
+
+    ExperimentResult {
+        id: 81,
+        category: "FEAT",
+        name: "Streaming console callback".into(),
+        status: if result.is_success() && streamed_count == 3 && has_step1 && has_warn {
+            "PASS"
+        } else {
+            "FAIL"
+        },
+        details: vec![
+            format!("Streamed {} messages (expected 3)", streamed_count),
+            format!("Has step1: {}, has warn: {}", has_step1, has_warn),
+            format!("Messages: {:?}", messages.iter().map(|(l, m)| format!("{:?}: {}", l, m)).collect::<Vec<_>>()),
+        ],
+    }
+}
+
+async fn exp82_persistent_sandbox_state(runtime: &SandCastle) -> ExperimentResult {
+    let caps = Arc::new(CapabilityRegistry::new());
+    let mut ps = runtime
+        .create_persistent_sandbox(Limits::default(), caps)
+        .await
+        .unwrap();
+
+    // Multi-turn via input passing (state carried through input/output)
+    let r1 = ps.execute_with_input("return { counter: 0, msg: 'initialized' };", serde_json::Value::Null).await.unwrap();
+
+    // Turn 2: pass previous output as input
+    let t1_output = match &r1.output { OutputValue::Json(v) => v.clone(), _ => serde_json::Value::Null };
+    let r2 = ps.execute_with_input(
+        "const state = globalThis.__sandcastle_input; state.counter += 10; return state;",
+        t1_output,
+    ).await.unwrap();
+
+    let t2_output = match &r2.output { OutputValue::Json(v) => v.clone(), _ => serde_json::Value::Null };
+    let r3 = ps.execute_with_input(
+        "const state = globalThis.__sandcastle_input; return state.counter;",
+        t2_output.clone(),
+    ).await.unwrap();
+
+    let r4 = ps.execute_with_input(
+        "const state = globalThis.__sandcastle_input; state.counter *= 2; return state;",
+        t2_output,
+    ).await.unwrap();
+
+    let t2_val = match &r2.output { OutputValue::Json(v) => v.get("counter").and_then(|c| c.as_f64()), _ => None };
+    let t3_val = match &r3.output { OutputValue::Json(v) => v.as_f64(), _ => None };
+    let t4_val = match &r4.output { OutputValue::Json(v) => v.get("counter").and_then(|c| c.as_f64()), _ => None };
+
+    ExperimentResult {
+        id: 82,
+        category: "FEAT",
+        name: "Persistent sandbox — multi-turn via input passing".into(),
+        status: if r1.is_success() && t2_val == Some(10.0) && t3_val == Some(10.0) && t4_val == Some(20.0) {
+            "PASS"
+        } else {
+            "FAIL"
+        },
+        details: vec![
+            format!("Turn 1 (init): {:?}", r1.output),
+            format!("Turn 2 (+=10): {:?} (expected counter=10)", r2.output),
+            format!("Turn 3 (read): {:?} (expected 10)", r3.output),
+            format!("Turn 4 (*=2): {:?} (expected counter=20)", r4.output),
+        ],
+    }
+}
+
+async fn exp83_persistent_sandbox_accumulation(runtime: &SandCastle) -> ExperimentResult {
+    let caps = Arc::new(CapabilityRegistry::new());
+    let mut ps = runtime
+        .create_persistent_sandbox(Limits::default(), caps)
+        .await
+        .unwrap();
+
+    // Multi-turn accumulation pattern — agent builds up a list over turns
+    let r1 = ps.execute_with_input(
+        r#"return { items: ["apple", "banana"] };"#,
+        serde_json::Value::Null,
+    ).await.unwrap();
+
+    let state = match &r1.output { OutputValue::Json(v) => v.clone(), _ => serde_json::Value::Null };
+    let r2 = ps.execute_with_input(
+        r#"const s = globalThis.__sandcastle_input; s.items.push("cherry"); return s;"#,
+        state,
+    ).await.unwrap();
+
+    let state2 = match &r2.output { OutputValue::Json(v) => v.clone(), _ => serde_json::Value::Null };
+    let r3 = ps.execute_with_input(
+        r#"const s = globalThis.__sandcastle_input; return { count: s.items.length, items: s.items };"#,
+        state2,
+    ).await.unwrap();
+
+    let count = match &r3.output { OutputValue::Json(v) => v.get("count").and_then(|c| c.as_f64()), _ => None };
+
+    ExperimentResult {
+        id: 83,
+        category: "FEAT",
+        name: "Persistent sandbox — multi-turn accumulation".into(),
+        status: if r1.is_success() && r2.is_success() && count == Some(3.0) { "PASS" } else { "FAIL" },
+        details: vec![
+            format!("Turn 1: {:?}", r1.output),
+            format!("Turn 2 (push cherry): {:?}", r2.output),
+            format!("Turn 3 (count): {:?} (expected 3)", r3.output),
+        ],
+    }
+}
+
+async fn exp84_module_shims(runtime: &SandCastle) -> ExperimentResult {
+    let code = r#"
+        const _ = require('lodash');
+        const path = require('path');
+        const { v4 } = require('uuid');
+        const { format } = require('date-fns');
+        const qs = require('qs');
+
+        return {
+            groupBy: Object.keys(_.groupBy([{t:'a'},{t:'b'},{t:'a'}], 't')).length,
+            sortBy: _.sortBy([3,1,2]),
+            chunk: _.chunk([1,2,3,4], 2),
+            range: _.range(5),
+            sum: _.sum([1,2,3]),
+            camelCase: _.camelCase('foo-bar'),
+            get: _.get({a:{b:42}}, 'a.b'),
+            pathJoin: path.join('/foo', 'bar'),
+            pathExt: path.extname('file.json'),
+            uuid: typeof v4() === 'string',
+            dateFormat: typeof format(new Date(), 'yyyy') === 'string',
+            qs: qs.stringify({a: 1}),
+        };
+    "#;
+
+    let result = runtime
+        .execute(ExecutionRequest::new(code))
+        .await
+        .unwrap();
+
+    let correct = match &result.output {
+        OutputValue::Json(v) => {
+            v["groupBy"] == 2
+                && v["range"] == serde_json::json!([0,1,2,3,4])
+                && v["sum"] == 6 // sum([1,2,3]) = 6
+                && v["camelCase"] == "fooBar"
+                && v["get"] == 42
+                && v["pathJoin"] == "/foo/bar"
+                && v["pathExt"] == ".json"
+                && v["uuid"] == true
+                && v["qs"] == "a=1"
+        }
+        _ => false,
+    };
+
+    ExperimentResult {
+        id: 84,
+        category: "FEAT",
+        name: "Module shims (lodash, path, uuid, date-fns, qs)".into(),
+        status: if result.is_success() && correct { "PASS" } else { "FAIL" },
+        details: vec![format!("Output: {:?}", result.output)],
+    }
+}
+
+async fn exp85_require_unknown_module_clear_error(runtime: &SandCastle) -> ExperimentResult {
+    let code = r#"
+        try {
+            require('express');
+            return { threw: false };
+        } catch(e) {
+            return {
+                threw: true,
+                mentionsSandbox: e.message.includes('SandCastle sandbox'),
+                listsShims: e.message.includes('lodash'),
+            };
+        }
+    "#;
+    let result = runtime.execute(ExecutionRequest::new(code)).await.unwrap();
+    let correct = match &result.output {
+        OutputValue::Json(v) => {
+            v["threw"] == true && v["mentionsSandbox"] == true && v["listsShims"] == true
+        }
+        _ => false,
+    };
+
+    ExperimentResult {
+        id: 85,
+        category: "FEAT",
+        name: "require('unknown') gives helpful error listing available shims".into(),
+        status: if result.is_success() && correct { "PASS" } else { "FAIL" },
+        details: vec![format!("Output: {:?}", result.output)],
+    }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -3204,6 +3426,24 @@ async fn main() {
     r.print(); results.push(r);
 
     let r = exp80_concurrent_kv_contention(runtime.clone()).await;
+    r.print(); results.push(r);
+
+    // ---- ROUND 4: NEW FEATURES ----
+    println!("\n--- ROUND 4: NEW FEATURES (81-85) ---\n");
+
+    let r = exp81_streaming_console_callback(&runtime).await;
+    r.print(); results.push(r);
+
+    let r = exp82_persistent_sandbox_state(&runtime).await;
+    r.print(); results.push(r);
+
+    let r = exp83_persistent_sandbox_accumulation(&runtime).await;
+    r.print(); results.push(r);
+
+    let r = exp84_module_shims(&runtime).await;
+    r.print(); results.push(r);
+
+    let r = exp85_require_unknown_module_clear_error(&runtime).await;
     r.print(); results.push(r);
 
     // ---- SUMMARY ----

@@ -515,6 +515,7 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
                         return arr.reduce((r, v) => { r[k(v)] = v; return r; }, {});
                     },
                     sortBy(arr, fn) {
+                        if (!fn) return [...arr].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
                         const k = typeof fn === 'function' ? fn : (o) => o[fn];
                         return [...arr].sort((a, b) => { const va = k(a), vb = k(b); return va < vb ? -1 : va > vb ? 1 : 0; });
                     },
