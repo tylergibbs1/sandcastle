@@ -62,6 +62,10 @@ macro_rules! get_memory {
     };
 }
 
+/// Callback invoked when guest code writes to console.
+/// Called synchronously from the WASM host function — must not block.
+pub type ConsoleCallback = Arc<dyn Fn(ConsoleLevel, &str) + Send + Sync>;
+
 /// Request to execute code in a sandbox.
 pub struct ExecutionRequest {
     /// JavaScript code to execute.
@@ -74,6 +78,9 @@ pub struct ExecutionRequest {
     pub limits: Limits,
     /// Input artifacts to mount.
     pub input_artifacts: Vec<Artifact>,
+    /// Optional streaming callback for console output.
+    /// Called in real-time as guest code writes to console.log/warn/error/debug.
+    pub on_console: Option<ConsoleCallback>,
 }
 
 impl ExecutionRequest {
@@ -84,6 +91,7 @@ impl ExecutionRequest {
             capabilities: Arc::new(CapabilityRegistry::new()),
             limits: Limits::default(),
             input_artifacts: vec![],
+            on_console: None,
         }
     }
 
@@ -104,6 +112,14 @@ impl ExecutionRequest {
 
     pub fn with_artifacts(mut self, artifacts: Vec<Artifact>) -> Self {
         self.input_artifacts = artifacts;
+        self
+    }
+
+    /// Set a callback that receives console output in real-time.
+    /// The callback is invoked synchronously each time guest code calls
+    /// `console.log()`, `console.warn()`, `console.error()`, or `console.debug()`.
+    pub fn with_console_callback(mut self, cb: impl Fn(ConsoleLevel, &str) + Send + Sync + 'static) -> Self {
+        self.on_console = Some(Arc::new(cb));
         self
     }
 }
@@ -136,6 +152,7 @@ pub(crate) struct SandboxState {
     pub(crate) start_time: Instant,
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) recorder: TranscriptRecorder,
+    pub(crate) on_console: Option<ConsoleCallback>,
 }
 
 /// A sandbox instance. Each sandbox gets its own Wasmtime Store.
@@ -192,6 +209,7 @@ impl Sandbox {
 
         let wasi = WasiCtxBuilder::new().build_p1();
 
+        let on_console = request.on_console;
         let state = SandboxState {
             limits: store_limits,
             wasi,
@@ -206,6 +224,7 @@ impl Sandbox {
             start_time: Instant::now(),
             cancelled: Arc::new(AtomicBool::new(false)),
             recorder,
+            on_console,
         };
 
         let mut store = Store::new(&self.engine, state);
@@ -472,6 +491,11 @@ impl Sandbox {
                     };
 
                     debug!(level = ?console_level, %message, "guest console");
+
+                    // Stream to callback if registered
+                    if let Some(cb) = &caller.data().on_console {
+                        cb(console_level, &message);
+                    }
 
                     let recorder_msg = message.clone();
                     let msg = ConsoleMessage {
@@ -751,5 +775,287 @@ impl Sandbox {
             .map_err(|e| SandcastleError::RuntimeInit(e.to_string()))?;
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PersistentSandbox — keeps WASM state alive across multiple execute() calls
+// ---------------------------------------------------------------------------
+
+use wasmtime::{Instance, TypedFunc, Memory};
+
+/// A sandbox that persists JS global state between executions.
+///
+/// Unlike `Sandbox` (which creates a fresh Store per call), `PersistentSandbox`
+/// keeps the Wasmtime Store + Instance alive so that `globalThis` variables,
+/// closures, and other JS state survive across turns.
+///
+/// ```ignore
+/// let mut ps = runtime.create_persistent_sandbox(limits).await?;
+/// ps.execute("globalThis.counter = 0;").await?;
+/// ps.execute("globalThis.counter += 1; return globalThis.counter;").await?;
+/// // → returns 1
+/// ps.execute("return globalThis.counter;").await?;
+/// // → returns 1 (state persists!)
+/// ```
+pub struct PersistentSandbox {
+    store: Store<SandboxState>,
+    instance: Instance,
+    evaluate: TypedFunc<(i32, i32, i32, i32), i32>,
+    alloc: TypedFunc<i32, i32>,
+    memory: Memory,
+    engine: Engine,
+    fuel_per_turn: u64,
+    memory_limit: u64,
+}
+
+impl PersistentSandbox {
+    /// Create a new persistent sandbox. Called by `SandCastle::create_persistent_sandbox`.
+    pub(crate) async fn new(
+        engine: &Engine,
+        module: &Module,
+        linker: &Linker<SandboxState>,
+        limits: Limits,
+        capabilities: Arc<CapabilityRegistry>,
+    ) -> Result<Self> {
+        let memory_limit = (limits.memory_mb as u64) * 1024 * 1024;
+        let fuel_per_turn = if limits.fuel > 0 { limits.fuel } else { u64::MAX };
+
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(memory_limit as usize)
+            .instances(1)
+            .tables(10)
+            .memories(1)
+            .trap_on_grow_failure(true)
+            .build();
+
+        let wasi = WasiCtxBuilder::new().build_p1();
+        let recorder = TranscriptRecorder::new(fuel_per_turn, memory_limit);
+
+        let state = SandboxState {
+            limits: store_limits,
+            wasi,
+            console_messages: Vec::new(),
+            capability_bridge: Some(Arc::new(CapabilityBridge::new(capabilities))),
+            output: OutputValue::Null,
+            output_artifacts: Vec::new(),
+            input_artifacts: vec![],
+            input_json: serde_json::Value::Null,
+            start_time: Instant::now(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            recorder,
+            on_console: None,
+        };
+
+        let mut store = Store::new(engine, state);
+        store.limiter(|state| &mut state.limits);
+        store.set_fuel(fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        store.set_epoch_deadline(100);
+
+        let instance = linker
+            .instantiate_async(&mut store, module)
+            .await
+            .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?;
+
+        let evaluate = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "evaluate")
+            .map_err(|e| SandcastleError::SandboxCreation(format!("missing 'evaluate': {e}")))?;
+
+        let alloc = instance
+            .get_typed_func::<i32, i32>(&mut store, "alloc")
+            .map_err(|e| SandcastleError::SandboxCreation(format!("missing 'alloc': {e}")))?;
+
+        let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
+            SandcastleError::SandboxCreation("missing 'memory' export".into())
+        })?;
+
+        // Run initial setup code (empty) to initialize the QuickJS runtime + polyfills
+        let init_code = b"return null;";
+        let init_input = b"null";
+
+        let code_ptr = alloc.call_async(&mut store, init_code.len() as i32).await
+            .map_err(|e| SandcastleError::SandboxCreation(format!("init alloc failed: {e}")))?;
+        memory.write(&mut store, code_ptr as usize, init_code)
+            .map_err(|e| SandcastleError::SandboxCreation(format!("init write failed: {e}")))?;
+
+        let input_ptr = alloc.call_async(&mut store, init_input.len() as i32).await
+            .map_err(|e| SandcastleError::SandboxCreation(format!("init alloc failed: {e}")))?;
+        memory.write(&mut store, input_ptr as usize, init_input)
+            .map_err(|e| SandcastleError::SandboxCreation(format!("init write failed: {e}")))?;
+
+        // Initialize QuickJS runtime
+        let _ = evaluate
+            .call_async(&mut store, (code_ptr, init_code.len() as i32, input_ptr, init_input.len() as i32))
+            .await;
+
+        // Refuel for subsequent calls
+        let remaining = store.get_fuel().unwrap_or(0);
+        if remaining < fuel_per_turn {
+            store.set_fuel(fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        }
+
+        Ok(Self {
+            store,
+            instance,
+            evaluate,
+            alloc,
+            memory,
+            engine: engine.clone(),
+            fuel_per_turn,
+            memory_limit,
+        })
+    }
+
+    /// Execute code in this persistent sandbox. JS global state from previous
+    /// calls is preserved.
+    pub async fn execute(&mut self, code: &str) -> Result<ExecutionResult> {
+        self.execute_with_input(code, serde_json::Value::Null).await
+    }
+
+    /// Execute code with JSON input. JS global state is preserved.
+    pub async fn execute_with_input(
+        &mut self,
+        code: &str,
+        input: serde_json::Value,
+    ) -> Result<ExecutionResult> {
+        let timeout = std::time::Duration::from_secs(10);
+
+        // Reset per-turn state
+        self.store.data_mut().output = OutputValue::Null;
+        self.store.data_mut().output_artifacts.clear();
+        self.store.data_mut().console_messages.clear();
+        self.store.data_mut().input_json = input.clone();
+        self.store.data_mut().start_time = Instant::now();
+        self.store.data_mut().cancelled.store(false, Ordering::SeqCst);
+
+        // Refuel
+        self.store.set_fuel(self.fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        self.store.set_epoch_deadline(100);
+
+        // Set up timeout
+        let engine_clone = self.engine.clone();
+        let cancelled = self.store.data().cancelled.clone();
+        let _timeout_guard = AbortOnDrop(tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            cancelled.store(true, Ordering::SeqCst);
+            for _ in 0..200 {
+                engine_clone.increment_epoch();
+            }
+        }));
+
+        let code_bytes = code.as_bytes();
+        let input_bytes = serde_json::to_vec(&input)
+            .map_err(|e| SandcastleError::Serialization(e.to_string()))?;
+
+        // Allocate and write code
+        let code_ptr = self.alloc
+            .call_async(&mut self.store, code_bytes.len() as i32)
+            .await
+            .map_err(|e| SandcastleError::Execution(ExecutionError::GuestError {
+                message: format!("alloc failed: {e}"),
+            }))?;
+        self.memory.write(&mut self.store, code_ptr as usize, code_bytes)
+            .map_err(|e| SandcastleError::Execution(ExecutionError::GuestError {
+                message: format!("memory write failed: {e}"),
+            }))?;
+
+        // Allocate and write input
+        let input_ptr = self.alloc
+            .call_async(&mut self.store, input_bytes.len() as i32)
+            .await
+            .map_err(|e| SandcastleError::Execution(ExecutionError::GuestError {
+                message: format!("alloc failed: {e}"),
+            }))?;
+        self.memory.write(&mut self.store, input_ptr as usize, &input_bytes)
+            .map_err(|e| SandcastleError::Execution(ExecutionError::GuestError {
+                message: format!("memory write failed: {e}"),
+            }))?;
+
+        // Call evaluate
+        let result = self.evaluate
+            .call_async(
+                &mut self.store,
+                (code_ptr, code_bytes.len() as i32, input_ptr, input_bytes.len() as i32),
+            )
+            .await;
+
+        let was_cancelled = self.store.data().cancelled.load(Ordering::SeqCst);
+        let fuel_consumed = self.fuel_per_turn.saturating_sub(
+            self.store.get_fuel().unwrap_or(0),
+        );
+        let peak_memory = self.memory.data_size(&self.store) as u64;
+        let memory_limit = self.memory_limit;
+
+        let (status, output) = match result {
+            Ok(0) => {
+                let output = std::mem::replace(&mut self.store.data_mut().output, OutputValue::Null);
+                (ExecutionStatus::Success, output)
+            }
+            Ok(_code) => {
+                let error_message = match &self.store.data().output {
+                    OutputValue::Json(v) => {
+                        if v.get("__sandcastle_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            v.get("message").and_then(|m| m.as_str()).map(|s| s.to_owned())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                let message = error_message.unwrap_or_else(|| {
+                    self.store.data().console_messages.iter().rev()
+                        .find(|m| m.level == ConsoleLevel::Error)
+                        .map(|m| m.message.clone())
+                        .unwrap_or_else(|| format!("guest returned error code: {_code}"))
+                });
+                (ExecutionStatus::GuestError { message }, OutputValue::Null)
+            }
+            Err(e) => {
+                if was_cancelled {
+                    (ExecutionStatus::Timeout, OutputValue::Null)
+                } else {
+                    let is_memory_error = e.chain().any(|cause| {
+                        let msg = cause.to_string();
+                        msg.contains("forcing trap when growing memory")
+                    });
+                    if is_memory_error {
+                        (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                    } else if let Some(trap) = e.downcast_ref::<Trap>().copied().or_else(|| {
+                        e.chain().find_map(|c| c.downcast_ref::<Trap>().copied())
+                    }) {
+                        match trap {
+                            Trap::OutOfFuel => (ExecutionStatus::FuelExhausted, OutputValue::Null),
+                            Trap::Interrupt => (ExecutionStatus::Timeout, OutputValue::Null),
+                            Trap::UnreachableCodeReached if peak_memory as f64 / memory_limit as f64 > 0.85 => {
+                                (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                            }
+                            _ => (ExecutionStatus::GuestError { message: format!("WASM trap: {trap}") }, OutputValue::Null),
+                        }
+                    } else {
+                        (ExecutionStatus::GuestError { message: e.to_string() }, OutputValue::Null)
+                    }
+                }
+            }
+        };
+
+        let output_artifacts = std::mem::take(&mut self.store.data_mut().output_artifacts);
+        let console = std::mem::take(&mut self.store.data_mut().console_messages);
+
+        // Build a minimal transcript
+        let mut recorder = TranscriptRecorder::new(self.fuel_per_turn, memory_limit);
+        recorder.set_output(output.clone());
+        recorder.set_fuel_consumed(fuel_consumed);
+        recorder.set_peak_memory(peak_memory);
+        for msg in &console {
+            recorder.record_console(msg.level, msg.message.clone());
+        }
+        let transcript = recorder.finalize(status.clone());
+
+        Ok(ExecutionResult {
+            status,
+            output,
+            transcript,
+            output_artifacts,
+        })
     }
 }

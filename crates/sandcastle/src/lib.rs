@@ -39,7 +39,7 @@ pub mod types;
 pub use capability::MethodSchema;
 pub use error::{CapabilityError, Result, SandcastleError};
 pub use runtime::{Config, SandCastle};
-pub use sandbox::{ExecutionRequest, ExecutionResult};
+pub use sandbox::{ExecutionRequest, ExecutionResult, PersistentSandbox};
 
 // Re-export the proc macro
 pub use sandcastle_macros::capability;

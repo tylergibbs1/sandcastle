@@ -4,8 +4,10 @@ use tokio::sync::Semaphore;
 use tracing::{debug, info};
 use wasmtime::{Config as WasmConfig, Engine, Linker, Module};
 
+use crate::capability::CapabilityRegistry;
 use crate::error::{Result, SandcastleError};
-use crate::sandbox::{ExecutionRequest, ExecutionResult, Sandbox, SandboxState};
+use crate::limits::Limits;
+use crate::sandbox::{ExecutionRequest, ExecutionResult, PersistentSandbox, Sandbox, SandboxState};
 use crate::types::SecurityMode;
 
 /// Configuration for the SandCastle runtime.
@@ -107,6 +109,34 @@ impl SandCastle {
     /// Create a retained sandbox for multi-turn execution.
     pub fn create_sandbox(&self) -> Result<Sandbox> {
         Sandbox::new(&self.engine, &self.module, self.linker.clone())
+    }
+
+    /// Create a persistent sandbox that preserves JS global state across
+    /// multiple `execute()` calls. Use this for multi-turn agent conversations
+    /// where each turn can see variables set by previous turns.
+    ///
+    /// ```ignore
+    /// let mut ps = runtime.create_persistent_sandbox(
+    ///     Limits::default(),
+    ///     Arc::new(CapabilityRegistry::new()),
+    /// ).await?;
+    /// ps.execute("globalThis.items = [];").await?;
+    /// ps.execute("globalThis.items.push(1); return globalThis.items;").await?;
+    /// // → [1]
+    /// ```
+    pub async fn create_persistent_sandbox(
+        &self,
+        limits: Limits,
+        capabilities: Arc<CapabilityRegistry>,
+    ) -> Result<PersistentSandbox> {
+        PersistentSandbox::new(
+            &self.engine,
+            &self.module,
+            &self.linker,
+            limits,
+            capabilities,
+        )
+        .await
     }
 
     /// Dispatch to a pre-registered script by name.

@@ -497,14 +497,140 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
                 };
             }
 
-            // --- require / module stubs (clear error for Node.js patterns) ---
+            // --- require / module stubs with common package shims ---
             if (typeof globalThis.require === 'undefined') {
+                // Lightweight shims for packages LLMs commonly import.
+                // These cover the most-used functions, not full implementations.
+                const _modules = {};
+
+                // --- lodash / underscore shims ---
+                const _lodash = {
+                    // Collections
+                    groupBy(arr, fn) {
+                        const k = typeof fn === 'function' ? fn : (o) => o[fn];
+                        return arr.reduce((r, v) => { const key = k(v); (r[key] = r[key] || []).push(v); return r; }, {});
+                    },
+                    keyBy(arr, fn) {
+                        const k = typeof fn === 'function' ? fn : (o) => o[fn];
+                        return arr.reduce((r, v) => { r[k(v)] = v; return r; }, {});
+                    },
+                    sortBy(arr, fn) {
+                        const k = typeof fn === 'function' ? fn : (o) => o[fn];
+                        return [...arr].sort((a, b) => { const va = k(a), vb = k(b); return va < vb ? -1 : va > vb ? 1 : 0; });
+                    },
+                    uniqBy(arr, fn) {
+                        const k = typeof fn === 'function' ? fn : (o) => o[fn];
+                        const seen = new Set(); return arr.filter(v => { const key = k(v); if (seen.has(key)) return false; seen.add(key); return true; });
+                    },
+                    uniq(arr) { return [...new Set(arr)]; },
+                    flatten(arr) { return arr.flat(1); },
+                    flattenDeep(arr) { return arr.flat(Infinity); },
+                    chunk(arr, size) {
+                        const r = []; for (let i = 0; i < arr.length; i += size) r.push(arr.slice(i, i + size)); return r;
+                    },
+                    compact(arr) { return arr.filter(Boolean); },
+                    zip(...arrays) {
+                        const len = Math.max(...arrays.map(a => a.length));
+                        return Array.from({length: len}, (_, i) => arrays.map(a => a[i]));
+                    },
+                    // Objects
+                    pick(obj, keys) { return keys.reduce((r, k) => { if (k in obj) r[k] = obj[k]; return r; }, {}); },
+                    omit(obj, keys) { const s = new Set(keys); return Object.fromEntries(Object.entries(obj).filter(([k]) => !s.has(k))); },
+                    merge(target, ...sources) { for (const s of sources) for (const [k, v] of Object.entries(s)) { if (v && typeof v === 'object' && !Array.isArray(v) && target[k] && typeof target[k] === 'object') _lodash.merge(target[k], v); else target[k] = v; } return target; },
+                    get(obj, path, def) {
+                        const keys = typeof path === 'string' ? path.split('.') : path;
+                        let r = obj; for (const k of keys) { if (r == null) return def; r = r[k]; } return r === undefined ? def : r;
+                    },
+                    set(obj, path, value) {
+                        const keys = typeof path === 'string' ? path.split('.') : path;
+                        let r = obj; for (let i = 0; i < keys.length - 1; i++) { if (!(keys[i] in r)) r[keys[i]] = {}; r = r[keys[i]]; } r[keys[keys.length - 1]] = value; return obj;
+                    },
+                    mapValues(obj, fn) { return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, fn(v, k)])); },
+                    // Strings
+                    camelCase(s) { return s.replace(/[-_\s]+(.)/g, (_, c) => c.toUpperCase()).replace(/^(.)/, (_, c) => c.toLowerCase()); },
+                    snakeCase(s) { return s.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/[-\s]+/g, '_').toLowerCase(); },
+                    kebabCase(s) { return s.replace(/([a-z])([A-Z])/g, '$1-$2').replace(/[_\s]+/g, '-').toLowerCase(); },
+                    capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(); },
+                    truncate(s, opts) { const len = (opts && opts.length) || 30; const end = (opts && opts.omission) || '...'; return s.length > len ? s.slice(0, len - end.length) + end : s; },
+                    // Utility
+                    cloneDeep(v) { return JSON.parse(JSON.stringify(v)); },
+                    isEmpty(v) { if (v == null) return true; if (Array.isArray(v) || typeof v === 'string') return v.length === 0; return Object.keys(v).length === 0; },
+                    isEqual(a, b) { return JSON.stringify(a) === JSON.stringify(b); },
+                    range(start, end, step) {
+                        if (end === undefined) { end = start; start = 0; } step = step || (start < end ? 1 : -1);
+                        const r = []; if (step > 0) for (let i = start; i < end; i += step) r.push(i); else for (let i = start; i > end; i += step) r.push(i); return r;
+                    },
+                    sum(arr) { return arr.reduce((a, b) => a + b, 0); },
+                    sumBy(arr, fn) { const k = typeof fn === 'function' ? fn : (o) => o[fn]; return arr.reduce((a, v) => a + k(v), 0); },
+                    min(arr) { return Math.min(...arr); },
+                    max(arr) { return Math.max(...arr); },
+                    minBy(arr, fn) { const k = typeof fn === 'function' ? fn : (o) => o[fn]; return arr.reduce((m, v) => k(v) < k(m) ? v : m); },
+                    maxBy(arr, fn) { const k = typeof fn === 'function' ? fn : (o) => o[fn]; return arr.reduce((m, v) => k(v) > k(m) ? v : m); },
+                    mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; },
+                    debounce(fn, ms) { return fn; }, // No-op in sandbox (no event loop)
+                    throttle(fn, ms) { return fn; },
+                    identity(v) { return v; },
+                    noop() {},
+                    times(n, fn) { return Array.from({length: n}, (_, i) => fn(i)); },
+                };
+                // Make all lodash functions available as named properties
+                _lodash._ = _lodash;
+                _lodash.default = _lodash;
+                _modules['lodash'] = _lodash;
+                _modules['lodash/fp'] = _lodash;
+                _modules['underscore'] = _lodash;
+
+                // --- path shim ---
+                _modules['path'] = {
+                    join(...parts) { return parts.join('/').replace(/\/+/g, '/'); },
+                    basename(p, ext) { const b = p.split('/').pop() || ''; return ext && b.endsWith(ext) ? b.slice(0, -ext.length) : b; },
+                    dirname(p) { const parts = p.split('/'); parts.pop(); return parts.join('/') || '.'; },
+                    extname(p) { const m = p.match(/(\.[^.]+)$/); return m ? m[1] : ''; },
+                    resolve(...parts) { return parts.reduce((r, p) => p.startsWith('/') ? p : r + '/' + p, '').replace(/\/+/g, '/'); },
+                    parse(p) { const ext = _modules['path'].extname(p); return { dir: _modules['path'].dirname(p), base: _modules['path'].basename(p), ext, name: _modules['path'].basename(p, ext) }; },
+                    sep: '/',
+                };
+                _modules['node:path'] = _modules['path'];
+
+                // --- uuid shim ---
+                _modules['uuid'] = {
+                    v4() { return crypto.randomUUID(); },
+                    default: { v4() { return crypto.randomUUID(); } },
+                };
+
+                // --- date-fns shim (most-used functions) ---
+                _modules['date-fns'] = {
+                    format(date, fmt) {
+                        const d = new Date(date);
+                        return fmt.replace(/yyyy/g, d.getFullYear()).replace(/MM/g, String(d.getMonth()+1).padStart(2,'0'))
+                            .replace(/dd/g, String(d.getDate()).padStart(2,'0')).replace(/HH/g, String(d.getHours()).padStart(2,'0'))
+                            .replace(/mm/g, String(d.getMinutes()).padStart(2,'0')).replace(/ss/g, String(d.getSeconds()).padStart(2,'0'));
+                    },
+                    parseISO(s) { return new Date(s); },
+                    addDays(date, n) { const d = new Date(date); d.setDate(d.getDate() + n); return d; },
+                    subDays(date, n) { const d = new Date(date); d.setDate(d.getDate() - n); return d; },
+                    differenceInDays(a, b) { return Math.floor((new Date(a) - new Date(b)) / 86400000); },
+                    isAfter(a, b) { return new Date(a) > new Date(b); },
+                    isBefore(a, b) { return new Date(a) < new Date(b); },
+                    startOfDay(date) { const d = new Date(date); d.setHours(0,0,0,0); return d; },
+                    endOfDay(date) { const d = new Date(date); d.setHours(23,59,59,999); return d; },
+                };
+
+                // --- querystring / qs shim ---
+                _modules['querystring'] = {
+                    stringify(obj) { return Object.entries(obj).map(([k,v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&'); },
+                    parse(s) { const r = {}; for (const p of s.replace(/^\?/, '').split('&')) { const [k,...v] = p.split('='); if (k) r[decodeURIComponent(k)] = decodeURIComponent(v.join('=')); } return r; },
+                };
+                _modules['qs'] = _modules['querystring'];
+                _modules['node:querystring'] = _modules['querystring'];
+
                 globalThis.require = function(mod) {
+                    if (_modules[mod]) return _modules[mod];
                     throw new Error(
                         "require('" + mod + "') is not available. " +
                         "This is a SandCastle sandbox, not Node.js. " +
-                        "Use __sandcastle_host_call() for host APIs, " +
-                        "or globalThis.__sandcastle_fs for file operations."
+                        "Available shims: " + Object.keys(_modules).join(', ') + ". " +
+                        "Use __sandcastle_host_call() for host APIs."
                     );
                 };
                 globalThis.module = { exports: {} };
