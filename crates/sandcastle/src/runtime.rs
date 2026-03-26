@@ -7,6 +7,7 @@ use wasmtime::{Config as WasmConfig, Engine, Linker, Module};
 use crate::capability::CapabilityRegistry;
 use crate::error::{Result, SandcastleError};
 use crate::limits::Limits;
+use crate::pool::PoolMetrics;
 use crate::sandbox::{ExecutionRequest, ExecutionResult, PersistentSandbox, Sandbox, SandboxState};
 use crate::types::SecurityMode;
 
@@ -39,6 +40,7 @@ pub struct SandCastle {
     #[expect(dead_code, reason = "will be used when Hardened mode is implemented")]
     security_mode: SecurityMode,
     concurrency_semaphore: Arc<Semaphore>,
+    metrics: Arc<PoolMetrics>,
 }
 
 impl SandCastle {
@@ -82,6 +84,7 @@ impl SandCastle {
             linker,
             security_mode,
             concurrency_semaphore,
+            metrics: Arc::new(PoolMetrics::new()),
         })
     }
 
@@ -100,6 +103,7 @@ impl SandCastle {
             .map_err(|_| SandcastleError::ResourceLimit("runtime is shutting down".into()))?;
 
         debug!(code_len = request.code.len(), "Creating sandbox for execution");
+        let _guard = self.metrics.execution_started();
 
         let sandbox = Sandbox::new(&self.engine, &self.module, self.linker.clone())?;
 
@@ -164,5 +168,13 @@ impl SandCastle {
     /// Get a reference to the WASM engine.
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// Get runtime execution metrics.
+    ///
+    /// Returns active (in-flight) and total (lifetime) execution counts.
+    /// Useful for monitoring, autoscaling, and observability dashboards.
+    pub fn metrics(&self) -> &PoolMetrics {
+        &self.metrics
     }
 }

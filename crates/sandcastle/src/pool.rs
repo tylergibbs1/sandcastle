@@ -22,7 +22,7 @@ pub struct PoolMetrics {
 }
 
 impl PoolMetrics {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             active_executions: AtomicUsize::new(0),
             total_executions: AtomicU64::new(0),

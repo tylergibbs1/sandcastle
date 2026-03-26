@@ -50,6 +50,15 @@ If you need Node.js APIs or heavy compute (JIT matters), use V8. If you need fas
 
 QuickJS (a C JavaScript engine) compiles to WASM and runs *inside* the sandbox. Guest code has zero access to the host — no filesystem, no network, no syscalls. Everything goes through explicit host function imports that you control and meter. The sandbox boundary is the WASM spec itself.
 
+### Research context
+
+This approach is validated by recent academic work:
+
+- **[LLM-in-Sandbox](https://arxiv.org/abs/2601.16206)** (Feb 2026) shows LLMs spontaneously use sandbox environments to handle long contexts, achieving **8x token reduction** (100K → 13K tokens). SandCastle's Code Mode implements this pattern.
+- **[CodeAgents](https://arxiv.org/html/2507.03254v1)** (Jul 2025) validates codified multi-agent reasoning — replacing N tool calls with a single code execution — the same pattern as our `createCodeTool()` / `TwoPassExecutor`.
+- **[Fault-Tolerant Sandboxing](https://arxiv.org/abs/2512.12806)** (Dec 2025) uses filesystem snapshots for safety (14.5% overhead). SandCastle achieves stronger isolation at 800x lower cost because WASM provides memory isolation without snapshotting.
+- **[Systems Security for Agentic Computing](https://arxiv.org/html/2512.01295v1)** (Dec 2025) argues for capability-based, least-privilege agent security — which is exactly SandCastle's architecture (typed capability bridge, per-capability quotas, domain allowlists).
+
 ## Quick Start
 
 ### Scaffold a new project
