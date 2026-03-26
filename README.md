@@ -60,6 +60,19 @@ This approach is validated by recent academic work:
 - **[Fault-Tolerant Sandboxing](https://arxiv.org/abs/2512.12806)** (Dec 2025) uses filesystem snapshots for safety (14.5% overhead). SandCastle achieves stronger isolation at 800x lower cost because WASM provides memory isolation without snapshotting.
 - **[Systems Security for Agentic Computing](https://arxiv.org/html/2512.01295v1)** (Dec 2025) argues for capability-based, least-privilege agent security — which is exactly SandCastle's architecture (typed capability bridge, per-capability quotas, domain allowlists).
 
+## Install
+
+```bash
+# npm (downloads pre-built binary automatically)
+npm install -g @grayhaven/sandcastle
+
+# Or from source
+cargo install --path crates/sandcastle-cli
+
+# Or Docker
+docker run -p 8080:8080 ghcr.io/tylergibbs1/sandcastle
+```
+
 ## Quick Start
 
 ### Scaffold a new project

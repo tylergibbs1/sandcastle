@@ -324,8 +324,15 @@ async fn run_script(
     allow_http: Option<String>,
     env_vars: Vec<String>,
 ) -> Result<()> {
-    let code = std::fs::read_to_string(&script)
-        .with_context(|| format!("Failed to read {}", script.display()))?;
+    let code = if script.as_os_str() == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).context("Failed to read from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(&script)
+            .with_context(|| format!("Failed to read {}", script.display()))?
+    };
 
     let input_value = if let Some(input_str) = input {
         serde_json::from_str(&input_str).context("Invalid JSON input")?
@@ -683,24 +690,34 @@ fn run_codegen(input_path: PathBuf, output: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// Embedded guest WASM module — bundled at compile time so the binary is self-contained.
+/// Override with --guest-module or SANDCASTLE_GUEST_MODULE for development.
+const EMBEDDED_GUEST_WASM: &[u8] =
+    include_bytes!("../../../guest/target/wasm32-wasip1/release/sandcastle_guest_js.wasm");
+
 fn load_guest_module(path: Option<PathBuf>) -> Result<Vec<u8>> {
+    // 1. Explicit --guest-module flag
     if let Some(p) = path {
         return std::fs::read(&p)
             .with_context(|| format!("Failed to read guest module {}", p.display()));
     }
 
+    // 2. SANDCASTLE_GUEST_MODULE env var
     if let Ok(env_path) = std::env::var("SANDCASTLE_GUEST_MODULE") {
         let p = PathBuf::from(&env_path);
         return std::fs::read(&p).with_context(|| {
-            format!(
-                "Failed to read guest module from SANDCASTLE_GUEST_MODULE={env_path}"
-            )
+            format!("Failed to read guest module from SANDCASTLE_GUEST_MODULE={env_path}")
         });
     }
 
+    // 3. Embedded WASM (compiled into the binary)
+    if !EMBEDDED_GUEST_WASM.is_empty() {
+        return Ok(EMBEDDED_GUEST_WASM.to_vec());
+    }
+
+    // 4. Fallback: search filesystem
     let candidates = [
         PathBuf::from("guest/target/wasm32-wasip1/release/sandcastle_guest_js.wasm"),
-        PathBuf::from("guest/target/wasm32-wasip2/release/sandcastle_guest_js.wasm"),
         PathBuf::from("sandcastle-guest-js.wasm"),
         PathBuf::from("/usr/local/share/sandcastle/guest-js.wasm"),
     ];
@@ -713,13 +730,7 @@ fn load_guest_module(path: Option<PathBuf>) -> Result<Vec<u8>> {
     }
 
     bail!(
-        "Guest WASM module not found. Tried:\n{}\n\
-         Set SANDCASTLE_GUEST_MODULE or use --guest-module to specify the path.\n\
-         Build the guest with: cd guest && cargo build --target wasm32-wasip1 --release",
-        candidates
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n")
+        "Guest WASM module not found.\n\
+         Run `sandcastle init` to set up a project, or set SANDCASTLE_GUEST_MODULE."
     )
 }

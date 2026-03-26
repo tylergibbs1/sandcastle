@@ -1,6 +1,6 @@
 {
   "name": "@grayhaven/sandcastle",
-  "version": "0.1.4",
+  "version": "0.1.8",
   "description": "TypeScript SDK for the SandCastle sandbox runtime",
   "license": "Apache-2.0",
   "type": "module",
@@ -18,9 +18,14 @@
     }
   },
   "types": "./dist/index.d.ts",
+  "bin": {
+    "sandcastle": "./bin/sandcastle"
+  },
   "files": [
     "dist",
     "src/guest",
+    "scripts",
+    "bin",
     "proto"
   ],
   "scripts": {
@@ -32,6 +37,7 @@
     "lint:fix": "biome check --write src/ test/",
     "format": "biome format --write src/ test/",
     "test": "bun test",
+    "postinstall": "node scripts/postinstall.js || true",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {
