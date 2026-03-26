@@ -51,8 +51,8 @@ enum Commands {
         #[arg(long, default_value = "10")]
         timeout: u64,
 
-        /// Fuel limit (instruction count)
-        #[arg(long, default_value = "10000000")]
+        /// Fuel limit (instruction count, 0 = unlimited)
+        #[arg(long, default_value = "1000000000")]
         fuel: u64,
 
         /// Input artifact files (name=path)
@@ -70,6 +70,10 @@ enum Commands {
         /// Allow HTTP capability (comma-separated allowed domains, or * for all)
         #[arg(long)]
         allow_http: Option<String>,
+
+        /// Environment variables to inject into process.env (KEY=VALUE)
+        #[arg(long = "env", short = 'e')]
+        env_vars: Vec<String>,
     },
 
     /// Start the HTTP server (dispatch mode)
@@ -146,10 +150,11 @@ async fn main() -> Result<()> {
             guest_module,
             transcript,
             allow_http,
+            env_vars,
         } => {
             run_script(
                 script, input, input_file, memory_mb, timeout, fuel, artifacts, guest_module,
-                transcript, allow_http,
+                transcript, allow_http, env_vars,
             )
             .await
         }
@@ -161,8 +166,8 @@ async fn main() -> Result<()> {
         } => run_serve(http, guest_module, allow_http, watch).await,
         Commands::Info => {
             println!("SandCastle v{}", env!("CARGO_PKG_VERSION"));
-            println!("Runtime: Wasmtime + QuickJS (WASM)");
-            println!("Security: Standard mode (in-process)");
+            println!("Runtime: Wasmtime 29 + QuickJS-NG (ES2024+)");
+            println!("Security: Standard mode (in-process WASM sandbox)");
             println!("Platform: {} {}", std::env::consts::OS, std::env::consts::ARCH);
             Ok(())
         }
@@ -317,6 +322,7 @@ async fn run_script(
     guest_module_path: Option<PathBuf>,
     show_transcript: bool,
     allow_http: Option<String>,
+    env_vars: Vec<String>,
 ) -> Result<()> {
     let code = std::fs::read_to_string(&script)
         .with_context(|| format!("Failed to read {}", script.display()))?;
@@ -367,11 +373,20 @@ async fn run_script(
         ..Limits::default()
     };
 
+    let mut env_map = std::collections::HashMap::new();
+    for arg in &env_vars {
+        let (key, value) = arg
+            .split_once('=')
+            .with_context(|| format!("Invalid env format '{arg}', expected KEY=VALUE"))?;
+        env_map.insert(key.to_string(), value.to_string());
+    }
+
     let request = ExecutionRequest::new(code)
         .with_input(input_value)
         .with_capabilities(Arc::new(registry))
         .with_limits(limits)
-        .with_artifacts(artifacts);
+        .with_artifacts(artifacts)
+        .with_env_map(env_map);
 
     let result = runtime.execute(request).await?;
 

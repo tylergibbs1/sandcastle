@@ -1,4 +1,4 @@
-.PHONY: build build-guest build-host test bench clean fmt clippy publish-sdk
+.PHONY: build build-guest build-host test test-cli bench clean fmt clippy publish-sdk
 
 # Build everything
 build: build-guest build-host
@@ -14,6 +14,10 @@ build-host:
 # Run tests
 test:
 	cargo test
+
+# Run CLI integration tests (requires release build)
+test-cli: build
+	bash tests/cli_integration.sh
 
 # Run benchmarks
 bench:
