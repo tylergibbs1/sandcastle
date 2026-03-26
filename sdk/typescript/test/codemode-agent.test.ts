@@ -11,18 +11,16 @@
 import { describe, expect, it } from "bun:test";
 import type { ToolDefinition } from "../src/codemode/index.js";
 import { createCodeTool, TwoPassExecutor } from "../src/codemode/index.js";
+import { BINARY_PATH, ENV_FILE, GUEST_MODULE } from "./test-paths.js";
 
 // ---------------------------------------------------------------------------
 // Prerequisites
 // ---------------------------------------------------------------------------
 
-const BINARY_PATH = "../../target/release/sandcastle";
-const GUEST_MODULE = "../../guest/target/wasm32-wasip1/release/sandcastle_guest_js.wasm";
-
 let apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
   try {
-    const envFile = await Bun.file("../../.env").text();
+    const envFile = await Bun.file(ENV_FILE).text();
     for (const line of envFile.split("\n")) {
       const match = line.match(/^ANTHROPIC_API_KEY=(.+)$/);
       if (match) {
