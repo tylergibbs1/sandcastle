@@ -1,0 +1,29 @@
+# Rust
+/target/
+guest/target/
+
+# Node
+node_modules/
+sdk/typescript/dist/
+sdk/typescript/node_modules/
+bun.lock
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.wasm
+
+# Claude
+.breadcrumbs.json

@@ -1,0 +1,36 @@
+// Client
+export { jsonArtifact, SandCastle, textArtifact } from "./client.js";
+
+// Errors
+export {
+  BinaryNotFoundError,
+  ExecutionAbortedError,
+  ExecutionFailedError,
+  FuelExhaustedError,
+  GuestError,
+  MemoryExceededError,
+  SandCastleError,
+  TimeoutError,
+} from "./core/errors.js";
+
+// Types — execution
+export type { SandCastleOptions } from "./types/config.js";
+export type {
+  CapabilityCallEntry,
+  ConsoleEntry,
+  ExecuteOptions,
+  ExecutionLimits,
+  ExecutionResult,
+  ExecutionStatus,
+  ExecutionTranscript,
+  InputArtifact,
+  OutputArtifact,
+  OutputValue,
+} from "./types/execution.js";
+
+// Types — namespaces
+export type {
+  DispatchNamespace,
+  NamespaceConfig,
+  ScriptConfig,
+} from "./types/namespace.js";

@@ -1,0 +1,54 @@
+{
+  "name": "sandcastle",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the SandCastle sandbox runtime",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./guest": {
+      "types": "./src/guest/index.d.ts"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src/guest",
+    "proto"
+  ],
+  "scripts": {
+    "build": "bun run build:js && bun run build:types",
+    "build:js": "bun build ./src/index.ts --outdir ./dist --target node --format esm",
+    "build:types": "tsc -p tsconfig.build.json",
+    "check": "biome check && tsc --noEmit",
+    "lint": "biome check src/ test/",
+    "lint:fix": "biome check --write src/ test/",
+    "format": "biome format --write src/ test/",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sandcastle-runtime/sandcastle",
+    "directory": "sdk/typescript"
+  },
+  "keywords": [
+    "sandbox",
+    "wasm",
+    "ai",
+    "agent",
+    "code-execution",
+    "sandcastle"
+  ]
+}

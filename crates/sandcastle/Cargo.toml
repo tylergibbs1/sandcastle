@@ -1,0 +1,33 @@
+[package]
+name = "sandcastle"
+description = "Lightweight WASM-based sandbox runtime for AI agent code execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sandcastle-macros = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+tokio = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+dashmap = { version = "6", optional = true }
+url = { version = "2", optional = true }
+
+[features]
+default = ["builtins"]
+kv = ["dashmap"]
+http-client = ["reqwest", "url"]
+builtins = ["kv", "http-client"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
