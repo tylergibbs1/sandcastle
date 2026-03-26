@@ -76,6 +76,38 @@ let result = runtime.execute(
 println!("{:?}", result.output); // Json(2)
 ```
 
+### With secrets and streaming
+
+```rust
+use sandcastle::sandbox::ExecutionRequest;
+
+let result = runtime.execute(
+    ExecutionRequest::new(r#"
+        const key = process.env.API_KEY;
+        console.log("Using key:", key.slice(0, 8) + "...");
+        return { authenticated: key.length > 0 };
+    "#)
+    .with_env("API_KEY", "sk-live-abc123")
+    .with_console_callback(|level, msg| {
+        println!("[{:?}] {}", level, msg);  // Real-time streaming
+    })
+).await?;
+```
+
+### Persistent KV (data survives restarts)
+
+```rust
+use sandcastle::capabilities::PersistentKvCapability;
+use sandcastle::capability::CapabilityRegistry;
+
+let kv = PersistentKvCapability::open("agent_memory.db").unwrap();
+let mut caps = CapabilityRegistry::new();
+caps.register(Box::new(kv));
+
+// Guest code can now use: __sandcastle_host_call("kv", "set", '{"key":"memory","value":"..."}')
+// Data persists across process restarts
+```
+
 ### TypeScript SDK
 
 ```bash
@@ -157,7 +189,9 @@ curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
 ### Host Capabilities
 - **Typed capability bridge** — expose host APIs to sandboxed code with quota enforcement
 - **Built-in KV store** — in-memory key-value storage (`DashMap`-backed), shareable across sandboxes
+- **Persistent KV store** — SQLite-backed KV that survives process restarts (`--features persistent-kv`)
 - **Built-in HTTP client** — real `reqwest`-backed HTTP with domain allowlists and response size caps
+- **Secret/env injection** — `.with_env("API_KEY", "sk-...")` injects into `process.env` securely
 - **Per-capability quotas** — max calls, payload size, transfer limits, concurrency caps (lock-free atomics)
 - **Quota enforcement throws JS exceptions** — guest code can't silently ignore quota exhaustion
 

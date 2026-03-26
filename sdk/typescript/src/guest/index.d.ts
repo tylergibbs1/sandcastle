@@ -71,7 +71,18 @@ declare function fetch(url: string | URL, init?: { method?: string; headers?: Re
   json(): Promise<unknown>;
 }>;
 declare const performance: { now(): number; timeOrigin: number };
-declare const process: { env: Record<string, string | undefined>; version: string; platform: string };
+
+/**
+ * Process stub. `process.env` is populated by the host via
+ * `ExecutionRequest::with_env("KEY", "value")` in Rust.
+ */
+declare const process: { env: Record<string, string | undefined>; version: string; platform: "wasm" };
+
+/**
+ * Require stub with built-in shims for common packages:
+ * `lodash`, `path`, `uuid`, `date-fns`, `qs`, `querystring`.
+ * Unknown modules throw a helpful error listing available shims.
+ */
 declare function require(module: string): unknown;
 
 // ---------------------------------------------------------------------------

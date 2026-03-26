@@ -57,12 +57,13 @@ The `sandcastle` CLI must be installed and in your PATH. See the [main repo](htt
 LLM-generated code just works — no configuration needed:
 
 ```javascript
-const _ = require('lodash');          // Built-in shim
+const _ = require('lodash');          // Built-in shim (groupBy, sortBy, get, etc.)
 const { format } = require('date-fns'); // Built-in shim
 const data = await fetch(url);        // Delegates to HTTP capability
 setTimeout(() => {}, 100);            // Runs immediately (no event loop)
 const clone = structuredClone(obj);   // JSON round-trip
 const id = crypto.randomUUID();       // Polyfilled
+const key = process.env.API_KEY;      // Injected by host via .with_env()
 ```
 
 ## Features
@@ -73,8 +74,10 @@ const id = crypto.randomUUID();       // Polyfilled
 - Host capability bridge (KV, HTTP, custom) with quota enforcement
 - `fetch()` polyfill — delegates to HTTP capability when registered
 - Module shims — `lodash`, `path`, `uuid`, `date-fns`, `qs` work via `require()`
-- Streaming output — real-time `console.log` callback
+- Streaming output — real-time `console.log` callback (Rust API)
 - Persistent sandboxes — multi-turn state via input passing
+- Persistent KV — SQLite-backed storage that survives restarts (Rust API, `--features persistent-kv`)
+- Secret injection — `process.env` populated from host-side config (Rust API)
 - Input/output artifacts (virtual filesystem)
 - Promise/async support (`return Promise.all([...])` works)
 - Polyfills: TextEncoder/TextDecoder, URL, atob/btoa, crypto, setTimeout, structuredClone, performance.now

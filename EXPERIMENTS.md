@@ -1,9 +1,11 @@
-# SandCastle Experiment Report — 50 Experiments
+# SandCastle Experiment Report
 
 **Date:** 2026-03-26
 **Platform:** Apple Silicon (Darwin 25.4.0), release mode
-**Results:** 25 PASS, 2 FAIL, 1 WARN, 22 INFO
-**Total runtime:** ~20 seconds
+**Rust experiments:** 85 (55 PASS, 0 FAIL, 1 WARN, 29 INFO)
+**Code Mode experiments:** 81 with real Claude API (Haiku + Opus)
+**Integration tests:** 140 passing
+**Total runtime:** ~22s (Rust), ~20min (Code Mode with Opus)
 
 ---
 
