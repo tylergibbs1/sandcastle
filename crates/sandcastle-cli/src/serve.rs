@@ -11,7 +11,7 @@ use tracing::info;
 
 use sandcastle::capability::CapabilityRegistry;
 use sandcastle::limits::Limits;
-use sandcastle::namespace::{DispatchNamespace, NamespaceLimits, NamespaceManager};
+use sandcastle::namespace::{NamespaceLimits, NamespaceManager};
 use sandcastle::registry::ScriptRegistry;
 use sandcastle::sandbox::ExecutionRequest;
 use sandcastle::SandCastle;

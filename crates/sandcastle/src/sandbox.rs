@@ -858,7 +858,7 @@ use wasmtime::{Instance, TypedFunc, Memory};
 /// ```
 pub struct PersistentSandbox {
     store: Store<SandboxState>,
-    instance: Instance,
+    _instance: Instance,
     evaluate: TypedFunc<(i32, i32, i32, i32), i32>,
     alloc: TypedFunc<i32, i32>,
     memory: Memory,
@@ -955,7 +955,7 @@ impl PersistentSandbox {
 
         Ok(Self {
             store,
-            instance,
+            _instance: instance,
             evaluate,
             alloc,
             memory,

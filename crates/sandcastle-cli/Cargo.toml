@@ -10,6 +10,10 @@ repository.workspace = true
 name = "sandcastle"
 path = "src/main.rs"
 
+[features]
+default = []
+builtins = []
+
 [dependencies]
 sandcastle = { workspace = true }
 anyhow = { workspace = true }

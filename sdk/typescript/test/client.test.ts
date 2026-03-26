@@ -57,3 +57,13 @@ describe("run() pre-flight checks", () => {
     }
   });
 });
+
+describe("diagnoseInstallation()", () => {
+  it("returns actionable diagnostics for a missing binary", async () => {
+    const sc = new SandCastle({ binaryPath: "/no/such/binary" });
+    const result = await sc.diagnoseInstallation();
+    expect(result.ok).toBe(false);
+    expect(result.binaryPath).toBe("/no/such/binary");
+    expect(result.nextSteps.length).toBeGreaterThan(0);
+  });
+});

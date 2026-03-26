@@ -18,7 +18,13 @@ if (existsSync(localBin)) {
 // recurse back to this wrapper via npm's PATH shim.
 console.error("sandcastle: binary not found.");
 console.error("");
-console.error("The postinstall download may have been skipped. Install manually:");
-console.error("  cargo install --path crates/sandcastle-cli");
-console.error("  # or download from: https://github.com/tylergibbs1/sandcastle/releases");
+console.error("The package wrapper is installed, but no native SandCastle binary is available.");
+console.error("This usually means the postinstall download was skipped or your platform is unsupported.");
+console.error("");
+console.error("Next steps:");
+console.error("  1. Run: npx sandcastle --help");
+console.error("  2. If this still fails, install from source:");
+console.error("     cargo install --path crates/sandcastle-cli");
+console.error("  3. Or download a release from:");
+console.error("     https://github.com/tylergibbs1/sandcastle/releases");
 process.exit(1);

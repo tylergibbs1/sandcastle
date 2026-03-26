@@ -1,4 +1,5 @@
 import { ExecutionAbortedError, errorFromResult } from "./core/errors.js";
+import { diagnoseInstallation } from "./core/diagnostics.js";
 import {
   createNamespaceViaHttp,
   deleteNamespaceViaHttp,
@@ -77,6 +78,13 @@ export class SandCastle {
     if (result.output.type === "json") return result.output.value as T;
     if (result.output.type === "string") return result.output.value as T;
     return undefined as T;
+  }
+
+  /**
+   * Diagnose whether the local SDK install can resolve a working SandCastle binary.
+   */
+  async diagnoseInstallation() {
+    return diagnoseInstallation(this.opts.binaryPath ?? "sandcastle");
   }
 
   // -------------------------------------------------------------------------

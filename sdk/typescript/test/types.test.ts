@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ExecutionResult, ExecutionStatus, OutputValue } from "../src/index.js";
-import { jsonArtifact, SandCastle, textArtifact } from "../src/index.js";
+import { diagnoseInstallation, jsonArtifact, SandCastle, textArtifact } from "../src/index.js";
 
 // -----------------------------------------------------------------------
 // Public API surface
@@ -19,6 +19,10 @@ describe("public exports", () => {
       defaults: { memoryMb: 64, timeoutMs: 30_000 },
     });
     expect(sc).toBeInstanceOf(SandCastle);
+  });
+
+  it("diagnoseInstallation is exported", () => {
+    expect(typeof diagnoseInstallation).toBe("function");
   });
 });
 

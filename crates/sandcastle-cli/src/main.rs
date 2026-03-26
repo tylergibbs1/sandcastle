@@ -98,6 +98,13 @@ enum Commands {
     /// Print version and runtime info
     Info,
 
+    /// Diagnose CLI installation and runtime readiness
+    Doctor {
+        /// Path to the guest WASM module
+        #[arg(long)]
+        guest_module: Option<PathBuf>,
+    },
+
     /// Initialize a new SandCastle project
     Init {
         /// Project directory (default: current directory)
@@ -129,8 +136,10 @@ async fn main() -> Result<()> {
 
     let filter = if cli.verbose {
         EnvFilter::new("sandcastle=debug")
-    } else {
+    } else if matches!(cli.command, Commands::Serve { .. }) {
         EnvFilter::new("sandcastle=info")
+    } else {
+        EnvFilter::new("sandcastle=warn")
     };
 
     tracing_subscriber::fmt()
@@ -171,6 +180,7 @@ async fn main() -> Result<()> {
             println!("Platform: {} {}", std::env::consts::OS, std::env::consts::ARCH);
             Ok(())
         }
+        Commands::Doctor { guest_module } => run_doctor(guest_module),
         Commands::Init { dir } => run_init(dir),
         Commands::Repl {
             guest_module,
@@ -190,6 +200,7 @@ async fn run_serve(
     let config = Config::new(guest_bytes);
     let runtime = SandCastle::new(config)?;
 
+    #[allow(unused_mut)]
     let mut capabilities = CapabilityRegistry::new();
 
     #[cfg(feature = "builtins")]
@@ -358,6 +369,7 @@ async fn run_script(
     let config = Config::new(guest_bytes);
     let runtime = SandCastle::new(config)?;
 
+    #[allow(unused_mut)]
     let mut registry = CapabilityRegistry::new();
 
     #[cfg(feature = "builtins")]
@@ -501,6 +513,68 @@ declare function __sandcastle_host_call(
     println!("  sandcastle run scripts/hello.js");
     println!("  sandcastle run scripts/hello.js --input '{{\"name\": \"Alice\"}}'");
     println!("  sandcastle serve --watch scripts/");
+
+    Ok(())
+}
+
+fn run_doctor(guest_module_path: Option<PathBuf>) -> Result<()> {
+    println!("SandCastle doctor");
+    println!("Version: {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "Platform: {} {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    println!();
+
+    match resolve_guest_module_source(guest_module_path.clone()) {
+        GuestModuleSource::Explicit(path) => {
+            println!("Guest module source: --guest-module ({})", path.display());
+        }
+        GuestModuleSource::Env(path) => {
+            println!(
+                "Guest module source: SANDCASTLE_GUEST_MODULE ({})",
+                path.display()
+            );
+        }
+        GuestModuleSource::Embedded => {
+            println!("Guest module source: embedded in CLI binary");
+        }
+        GuestModuleSource::Filesystem(path) => {
+            println!("Guest module source: filesystem fallback ({})", path.display());
+        }
+        GuestModuleSource::Missing => {
+            println!("Guest module source: not found");
+        }
+    }
+
+    let guest_bytes = match load_guest_module(guest_module_path) {
+        Ok(bytes) => {
+            println!("Guest module: ok ({} bytes)", bytes.len());
+            bytes
+        }
+        Err(err) => {
+            println!("Guest module: error");
+            println!();
+            println!("{err:#}");
+            return Ok(());
+        }
+    };
+
+    match SandCastle::new(Config::new(guest_bytes)) {
+        Ok(_) => {
+            println!("Runtime initialization: ok");
+            println!();
+            println!("Ready: yes");
+        }
+        Err(err) => {
+            println!("Runtime initialization: error");
+            println!();
+            println!("{err:#}");
+            println!();
+            println!("Ready: no");
+        }
+    }
 
     Ok(())
 }
@@ -733,4 +807,40 @@ fn load_guest_module(path: Option<PathBuf>) -> Result<Vec<u8>> {
         "Guest WASM module not found.\n\
          Run `sandcastle init` to set up a project, or set SANDCASTLE_GUEST_MODULE."
     )
+}
+
+enum GuestModuleSource {
+    Explicit(PathBuf),
+    Env(PathBuf),
+    Embedded,
+    Filesystem(PathBuf),
+    Missing,
+}
+
+fn resolve_guest_module_source(path: Option<PathBuf>) -> GuestModuleSource {
+    if let Some(p) = path {
+        return GuestModuleSource::Explicit(p);
+    }
+
+    if let Ok(env_path) = std::env::var("SANDCASTLE_GUEST_MODULE") {
+        return GuestModuleSource::Env(PathBuf::from(env_path));
+    }
+
+    if !EMBEDDED_GUEST_WASM.is_empty() {
+        return GuestModuleSource::Embedded;
+    }
+
+    let candidates = [
+        PathBuf::from("guest/target/wasm32-wasip1/release/sandcastle_guest_js.wasm"),
+        PathBuf::from("sandcastle-guest-js.wasm"),
+        PathBuf::from("/usr/local/share/sandcastle/guest-js.wasm"),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return GuestModuleSource::Filesystem(candidate);
+        }
+    }
+
+    GuestModuleSource::Missing
 }

@@ -6,7 +6,48 @@
 
 <p align="center">Lightweight WASM-based sandbox runtime for AI agent code execution.</p>
 
-SandCastle lets AI agents execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and <2MB memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS-NG (ES2024+) as the JavaScript engine.
+SandCastle lets you execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and ~1.3MB peak memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS-NG (ES2024+) as the JavaScript engine.
+
+For most developers, the best entry point is the TypeScript SDK.
+
+## Quick Start
+
+```bash
+npm install @grayhaven/sandcastle
+```
+
+```ts
+import { SandCastle } from "@grayhaven/sandcastle";
+
+const sc = new SandCastle();
+const result = await sc.run<number>("return 1 + 1;");
+
+console.log(result); // 2
+```
+
+What happens on install:
+
+- On macOS and Linux, the package tries to download the `sandcastle` CLI automatically during `postinstall`.
+- On unsupported platforms, or if the download is skipped, you can install the CLI manually from source.
+- The SDK throws a `BinaryNotFoundError` with next steps if the CLI is unavailable.
+
+Primary docs:
+
+- [TypeScript quick start](docs/quickstart-typescript.md)
+- [CLI guide](docs/cli.md)
+- [Rust library mode](docs/rust.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Architecture](docs/architecture.md)
+
+Support matrix:
+
+- Node.js: 18+
+- Auto binary download: macOS and Linux
+- Manual install required: unsupported platforms, offline installs, or when `postinstall` is skipped
+
+## Why
+
+SandCastle is optimized for agent-style code execution: short-lived JavaScript runs, bounded side effects, fast startup, and explicit capability control.
 
 ```
                         Apple Silicon (M4)     AWS c7g.xlarge (Graviton3)
@@ -21,9 +62,7 @@ Guest WASM module:      ~868KB                 ~868KB
 
 Still **100x faster than Docker** (~500ms) and **25x faster than E2B** (~100ms) even on the slowest platform.
 
-## Why
-
-AI agents need to run code. The options are containers (slow), V8 isolates (heavy), or `eval` (insecure). SandCastle is a different tradeoff — WASM-based sandboxes that are faster and lighter than both.
+AI agents need to run code. The usual options are containers (slow), V8 isolates (heavier), or `eval` (unsafe). SandCastle is a different tradeoff: WASM-based sandboxes that are fast, lightweight, and capability-driven.
 
 | Solution | Startup | Memory | Binary/Runtime | JS Compat | Security |
 |----------|---------|--------|----------------|-----------|----------|
@@ -60,31 +99,23 @@ This approach is validated by recent academic work:
 - **[Fault-Tolerant Sandboxing](https://arxiv.org/abs/2512.12806)** (Dec 2025) uses filesystem snapshots for safety (14.5% overhead). SandCastle achieves stronger isolation at 800x lower cost because WASM provides memory isolation without snapshotting.
 - **[Systems Security for Agentic Computing](https://arxiv.org/html/2512.01295v1)** (Dec 2025) argues for capability-based, least-privilege agent security — which is exactly SandCastle's architecture (typed capability bridge, per-capability quotas, domain allowlists).
 
-## Install
+## Other Entry Points
+
+### CLI
 
 ```bash
-# npm (downloads pre-built binary for macOS/Linux)
-npm install -g @grayhaven/sandcastle
-
-# Or from source (any platform with Rust)
-git clone https://github.com/tylergibbs1/sandcastle.git && cd sandcastle
-cargo install --path crates/sandcastle-cli
-
-# Or Docker
-docker build -t sandcastle . && docker run -p 8080:8080 sandcastle
+npx sandcastle --help
 ```
 
-## Quick Start
-
-### Scaffold a new project
+### Scaffold a project
 
 ```bash
-sandcastle init my-project
-cd my-project
-sandcastle run scripts/hello.js --input '{"name": "Alice"}'
+mkdir my-project && cd my-project
+npx sandcastle init
+npx sandcastle run scripts/hello.js --input '{"name": "Alice"}'
 ```
 
-### Rust (library mode)
+### Rust library mode
 
 ```rust
 use sandcastle::runtime::{Config, SandCastle};
@@ -100,126 +131,30 @@ let result = runtime.execute(
 println!("{:?}", result.output); // Json(2)
 ```
 
-### With secrets and streaming
-
-```rust
-use sandcastle::sandbox::ExecutionRequest;
-
-let result = runtime.execute(
-    ExecutionRequest::new(r#"
-        const key = process.env.API_KEY;
-        console.log("Using key:", key.slice(0, 8) + "...");
-        return { authenticated: key.length > 0 };
-    "#)
-    .with_env("API_KEY", "sk-live-abc123")
-    .with_console_callback(|level, msg| {
-        println!("[{:?}] {}", level, msg);  // Real-time streaming
-    })
-).await?;
-```
-
-### Persistent KV (data survives restarts)
-
-```rust
-use sandcastle::capabilities::PersistentKvCapability;
-use sandcastle::capability::CapabilityRegistry;
-
-let kv = PersistentKvCapability::open("agent_memory.db").unwrap();
-let mut caps = CapabilityRegistry::new();
-caps.register(Box::new(kv));
-
-// Guest code can now use: __sandcastle_host_call("kv", "set", '{"key":"memory","value":"..."}')
-// Data persists across process restarts
-```
-
-### TypeScript SDK
-
-```bash
-bun add @grayhaven/sandcastle  # or npm install @grayhaven/sandcastle
-```
-
-```typescript
-import { SandCastle } from "@grayhaven/sandcastle";
-
-const sc = new SandCastle();
-const result = await sc.run<number>("return 1 + 1;");
-// result === 2
-```
-
 ### CLI
 
 ```bash
-# Run a script
-sandcastle run script.js --input '{"name": "Alice"}'
-
-# Pipe from stdin
-echo 'return 1 + 1;' | sandcastle run -
-
-# With environment variables
-sandcastle run script.js -e API_KEY=sk-... -e DEBUG=true
-
-# Interactive REPL
-sandcastle repl
-
-# Generate TypeScript declarations from capability definitions
-sandcastle codegen capabilities.json -o types.d.ts
+npx sandcastle run script.js --input '{"name": "Alice"}'
+npx sandcastle doctor
+npx sandcastle repl
+npx sandcastle codegen capabilities.json -o types.d.ts
 ```
 
 ### HTTP Server
 
 ```bash
-# Start server with hot-reload from a scripts directory
-sandcastle serve --http 0.0.0.0:8080 --watch ./scripts
+npx sandcastle serve --http 0.0.0.0:8080 --watch ./scripts
 
-# Execute code
 curl -X POST http://localhost:8080/execute \
   -H 'Content-Type: application/json' \
   -d '{"code": "return input.x * 2", "input": {"x": 21}}'
-
-# Register a named script
-curl -X POST http://localhost:8080/scripts \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "doubler", "code": "return globalThis.__sandcastle_input.x * 2"}'
-
-# Dispatch to it
-curl -X POST http://localhost:8080/dispatch/doubler \
-  -H 'Content-Type: application/json' \
-  -d '{"input": {"x": 21}}'
-
-# Multi-tenant namespaces
-curl -X POST http://localhost:8080/namespaces \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "tenant-abc"}'
-
-curl -X POST http://localhost:8080/namespaces/tenant-abc/scripts \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "worker", "code": "return globalThis.__sandcastle_input.x + 1"}'
-
-curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
-  -H 'Content-Type: application/json' \
-  -d '{"input": {"x": 41}}'
 ```
 
 ### Deploy
 
 ```bash
-# Docker (runs anywhere)
 docker build -t sandcastle .
 docker run -p 8080:8080 sandcastle
-
-# AWS ECS Fargate
-docker build -t sandcastle .
-aws ecr create-repository --repository-name sandcastle
-docker tag sandcastle:latest <account>.dkr.ecr.<region>.amazonaws.com/sandcastle:latest
-aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-docker push <account>.dkr.ecr.<region>.amazonaws.com/sandcastle:latest
-# Then create an ECS service pointing to the image
-
-# Fly.io (uses Dockerfile from repo)
-fly launch --internal-port 8080
-
-# Railway / Render
-# Just connect your repo — they auto-detect the Dockerfile
 ```
 
 The Docker image is ~120MB and starts in <1 second. The server exposes all REST endpoints on port 8080.
@@ -271,6 +206,7 @@ The Docker image is ~120MB and starts in <1 second. The server exposes all REST 
 ### CLI
 - **`sandcastle run`** — execute a script
 - **`sandcastle serve`** — HTTP server with REST API + hot reload
+- **`sandcastle doctor`** — diagnose guest module resolution and runtime readiness
 - **`sandcastle init`** — scaffold a new project
 - **`sandcastle repl`** — interactive JS REPL with multi-line support
 - **`sandcastle codegen`** — generate TypeScript declarations from capability definitions

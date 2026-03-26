@@ -1,23 +1,30 @@
 # @grayhaven/sandcastle
 
-TypeScript SDK for the [SandCastle](https://github.com/tylergibbs1/sandcastle) sandbox runtime — lightweight WASM-based sandboxes for AI agent code execution.
+TypeScript SDK for the [SandCastle](https://github.com/tylergibbs1/sandcastle) sandbox runtime.
 
 ## Install
 
 ```bash
-bun add @grayhaven/sandcastle
-# or
 npm install @grayhaven/sandcastle
+# or
+bun add @grayhaven/sandcastle
 ```
 
-## Quick Start
+On macOS and Linux, the package tries to download the `sandcastle` CLI automatically during `postinstall`.
+
+- Supported Node versions: 18+
+- Automatic binary download: macOS and Linux
+- Manual install required: unsupported platforms, offline installs, or when `postinstall` is skipped
+
+## 5-Minute Quick Start
 
 ```typescript
 import { SandCastle } from "@grayhaven/sandcastle";
 
 const sc = new SandCastle();
 const result = await sc.run<number>("return 1 + 1;");
-// result === 2
+
+console.log(result); // 2
 ```
 
 ### With Input
@@ -30,7 +37,27 @@ const result = await sc.run<string>(
 // result === "Hello World"
 ```
 
-### Code Mode (reduce LLM tool calls by 80%)
+If the binary is unavailable, the SDK throws `BinaryNotFoundError` with next steps. You can also verify the wrapper directly:
+
+```bash
+npx sandcastle --help
+```
+
+Or diagnose the SDK install directly:
+
+```typescript
+import { diagnoseInstallation } from "@grayhaven/sandcastle";
+
+console.log(await diagnoseInstallation());
+```
+
+## Common Next Steps
+
+- Need the CLI? See the top-level [CLI guide](../../docs/cli.md).
+- Need troubleshooting? See [Troubleshooting](../../docs/troubleshooting.md).
+- Need Rust embedding? See [Rust library mode](../../docs/rust.md).
+
+## Code Mode
 
 ```typescript
 import { createCodeTool, TwoPassExecutor } from "@grayhaven/sandcastle/codemode";
@@ -47,10 +74,6 @@ Feed these to your LLM so it knows the sandbox API:
 ```typescript
 import type {} from "@grayhaven/sandcastle/guest";
 ```
-
-## Requirements
-
-The `sandcastle` CLI is downloaded automatically on macOS/Linux via postinstall. On other platforms, [install from source](https://github.com/tylergibbs1/sandcastle#install).
 
 ## What works out of the box
 

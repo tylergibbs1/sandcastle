@@ -1,5 +1,6 @@
 // Client
 export { jsonArtifact, SandCastle, textArtifact } from "./client.js";
+export { diagnoseInstallation } from "./core/diagnostics.js";
 
 // Errors
 export {
@@ -12,6 +13,7 @@ export {
   SandCastleError,
   TimeoutError,
 } from "./core/errors.js";
+export type { InstallationDiagnostics } from "./core/diagnostics.js";
 
 // Types — execution
 export type { SandCastleOptions } from "./types/config.js";

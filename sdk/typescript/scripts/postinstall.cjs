@@ -37,22 +37,25 @@ function isAlreadyInstalled() {
 
 function fetch(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { "User-Agent": "sandcastle-npm" } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetch(res.headers.location).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        return reject(new Error(`HTTP ${res.statusCode}`));
-      }
-      resolve(res);
-    }).on("error", reject);
+    https
+      .get(url, { headers: { "User-Agent": "sandcastle-npm" } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return fetch(res.headers.location).then(resolve, reject);
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        resolve(res);
+      })
+      .on("error", reject);
   });
 }
 
 async function downloadBinary() {
   const name = getPlatformBinary();
   if (!name) {
-    console.log("sandcastle: unsupported platform, skipping binary download");
+    console.log("sandcastle: unsupported platform for automatic binary download.");
+    console.log("sandcastle: install manually from source or GitHub releases.");
     return;
   }
 
@@ -70,13 +73,13 @@ async function downloadBinary() {
     const release = JSON.parse(Buffer.concat(chunks).toString());
     const asset = release.assets?.find((a) => a.name === `${name}.tar.gz`);
     if (!asset) {
-      console.log(`sandcastle: no pre-built binary for ${name} in latest release, skipping`);
+      console.log(`sandcastle: no pre-built binary for ${name} in latest release`);
       console.log("sandcastle: install Rust and build from source: https://github.com/" + REPO);
       return;
     }
     releaseUrl = asset.browser_download_url;
-  } catch (e) {
-    console.log("sandcastle: could not fetch release info, skipping binary download");
+  } catch {
+    console.log("sandcastle: could not fetch release info");
     console.log("sandcastle: install manually: https://github.com/" + REPO);
     return;
   }
@@ -103,11 +106,10 @@ async function downloadBinary() {
       chmodSync(BIN_PATH, 0o755);
     }
 
-    // Clean up tar
     require("fs").unlinkSync(tarPath);
     console.log(`sandcastle: installed to ${BIN_PATH}`);
-  } catch (e) {
-    console.log("sandcastle: binary download failed, skipping");
+  } catch {
+    console.log("sandcastle: binary download failed");
     console.log("sandcastle: install manually: https://github.com/" + REPO);
   }
 }
