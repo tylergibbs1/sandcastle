@@ -48,6 +48,33 @@ declare const crypto: {
 };
 
 // ---------------------------------------------------------------------------
+// Timers & scheduling (synchronous stubs — no event loop)
+// ---------------------------------------------------------------------------
+
+declare function setTimeout(fn: (...args: unknown[]) => void, delay?: number, ...args: unknown[]): number;
+declare function clearTimeout(id: number): void;
+declare function setInterval(fn: (...args: unknown[]) => void, delay?: number, ...args: unknown[]): number;
+declare function clearInterval(id: number): void;
+declare function queueMicrotask(fn: () => void): void;
+
+// ---------------------------------------------------------------------------
+// Additional globals
+// ---------------------------------------------------------------------------
+
+declare function structuredClone<T>(value: T): T;
+declare function fetch(url: string | URL, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: { get(name: string): string | null; has(name: string): boolean };
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+}>;
+declare const performance: { now(): number; timeOrigin: number };
+declare const process: { env: Record<string, string | undefined>; version: string; platform: string };
+declare function require(module: string): unknown;
+
+// ---------------------------------------------------------------------------
 // Virtual filesystem (artifacts)
 // ---------------------------------------------------------------------------
 

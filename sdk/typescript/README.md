@@ -52,17 +52,35 @@ import type {} from "@grayhaven/sandcastle/guest";
 
 The `sandcastle` CLI must be installed and in your PATH. See the [main repo](https://github.com/tylergibbs1/sandcastle) for installation instructions.
 
+## What works out of the box
+
+LLM-generated code just works — no configuration needed:
+
+```javascript
+const _ = require('lodash');          // Built-in shim
+const { format } = require('date-fns'); // Built-in shim
+const data = await fetch(url);        // Delegates to HTTP capability
+setTimeout(() => {}, 100);            // Runs immediately (no event loop)
+const clone = structuredClone(obj);   // JSON round-trip
+const id = crypto.randomUUID();       // Polyfilled
+```
+
 ## Features
 
 - Sub-millisecond sandbox creation (~600us, 1,700 ops/sec sustained)
+- ES2024+ support (QuickJS-NG) — `Object.groupBy`, `Set.intersection`, iterator helpers
 - Fuel metering, memory limits, wall-clock timeouts
 - Host capability bridge (KV, HTTP, custom) with quota enforcement
+- `fetch()` polyfill — delegates to HTTP capability when registered
+- Module shims — `lodash`, `path`, `uuid`, `date-fns`, `qs` work via `require()`
+- Streaming output — real-time `console.log` callback
+- Persistent sandboxes — multi-turn state via input passing
 - Input/output artifacts (virtual filesystem)
-- Execution transcripts with console output
 - Promise/async support (`return Promise.all([...])` works)
-- Built-in polyfills: TextEncoder/TextDecoder, URL, atob/btoa, crypto
+- Polyfills: TextEncoder/TextDecoder, URL, atob/btoa, crypto, setTimeout, structuredClone, performance.now
 - Memory protection: `MemoryExceeded` status instead of opaque WASM traps
-- 140 integration tests, 80 experiments
+- LLM-friendly errors: `require('express')` explains alternatives instead of crashing
+- 140 integration tests, 85 experiments
 
 ## License
 

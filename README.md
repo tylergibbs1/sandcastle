@@ -147,7 +147,11 @@ curl -X POST http://localhost:8080/namespaces/tenant-abc/dispatch/worker \
 - **Memory protection** — `trap_on_grow_failure` + `MemoryExceeded` status (not opaque traps)
 - **Execution transcripts** — structured logs with console output, capability calls, fuel/memory usage
 - **Promise/async support** — `return Promise.resolve(42)` and `return asyncFn()` resolve correctly
-- **Web API polyfills** — `TextEncoder`/`TextDecoder`, `URL`/`URLSearchParams`, `atob`/`btoa`, `crypto.randomUUID`/`getRandomValues`
+- **Web API polyfills** — `TextEncoder`/`TextDecoder`, `URL`/`URLSearchParams`, `atob`/`btoa`, `crypto.randomUUID`/`getRandomValues`, `setTimeout`, `structuredClone`, `performance.now`, `fetch()`
+- **Module shims** — `require('lodash')`, `require('path')`, `require('uuid')`, `require('date-fns')`, `require('qs')` work out of the box with lightweight implementations
+- **Streaming output** — `on_console` callback for real-time `console.log` delivery
+- **Persistent sandboxes** — `create_persistent_sandbox()` for multi-turn agent conversations
+- **LLM-friendly errors** — `require('express')` explains "this is a SandCastle sandbox" with available alternatives; `process.env` and `module.exports` stubs prevent crashes
 - **Better error messages** — JS errors surface the actual error text, not just "error code 1"
 
 ### Host Capabilities
