@@ -14,6 +14,7 @@ const { createWriteStream, mkdirSync, chmodSync, existsSync } = require("fs");
 const { join } = require("path");
 const https = require("https");
 
+// Must match the repo where GitHub Releases are published
 const REPO = "tylergibbs1/sandcastle";
 const BIN_DIR = join(__dirname, "..", "bin");
 const BIN_PATH = join(BIN_DIR, process.platform === "win32" ? "sandcastle.exe" : "sandcastle");

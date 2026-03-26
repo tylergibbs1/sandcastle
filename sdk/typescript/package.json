@@ -18,14 +18,10 @@
     }
   },
   "types": "./dist/index.d.ts",
-  "bin": {
-    "sandcastle": "./bin/sandcastle"
-  },
   "files": [
     "dist",
     "src/guest",
     "scripts",
-    "bin",
     "proto"
   ],
   "scripts": {
@@ -51,7 +47,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sandcastle-runtime/sandcastle",
+    "url": "https://github.com/tylergibbs1/sandcastle",
     "directory": "sdk/typescript"
   },
   "keywords": [
