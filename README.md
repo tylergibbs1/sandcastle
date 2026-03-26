@@ -22,22 +22,32 @@ Benchmarked (Apple Silicon, release mode):
 
 ## Why
 
-AI agents need to run code. The alternatives are slow (Docker ~500ms), platform-locked (Cloudflare Workers), or insecure (eval). SandCastle gives you fast, portable, secure sandboxes you can embed anywhere.
+AI agents need to run code. The options are containers (slow), V8 isolates (heavy), or `eval` (insecure). SandCastle is a different tradeoff — WASM-based sandboxes that are faster and lighter than both.
 
-| Solution | Startup | Memory | Portable | Security |
-|----------|---------|--------|----------|----------|
-| Docker | ~500ms | ~100MB+ | Yes | Namespace isolation |
-| Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | V8 isolates |
-| E2B | ~100-200ms | ~512MB min | Self-hostable (requires KVM) | Firecracker |
-| **SandCastle** | **<1ms** | **~1.3MB** | **Anywhere** | **WASM sandbox** |
+| Solution | Startup | Memory | Binary/Runtime | JS Compat | Security |
+|----------|---------|--------|----------------|-----------|----------|
+| Docker | ~500ms | ~100MB+ | Docker daemon | Full Node.js | Namespace isolation |
+| E2B | ~100-200ms | ~512MB min | Hosted / KVM | Full Node.js | Firecracker |
+| V8 isolate (self-hosted) | ~3-5ms | ~5MB | ~50MB (V8 lib) | Full ES2024+ | V8 isolate boundary |
+| Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | Full ES2024+ | V8 isolates |
+| **SandCastle** | **<1ms** | **~1.3MB** | **~857KB WASM** | **ES2023 + polyfills** | **WASM spec boundary** |
 
-### Why WASM instead of containers?
+### Containers vs SandCastle
 
-Containers (Docker, Firecracker) boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms startup and 100MB+ memory — fine for long-running services, but AI agents make 10-50 tool calls per conversation. At 500ms per sandbox, that's 5-25 seconds of waiting. At 600µs, it's 6-30ms.
+Containers boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms startup and 100MB+ memory — fine for long-running services, but AI agents make 10-50 tool calls per conversation. At 500ms per sandbox, that's 5-25 seconds of waiting. At 600µs, it's 6-30ms.
 
-SandCastle uses **WebAssembly as the isolation layer**. The QuickJS JavaScript engine compiles to WASM and runs *inside* the sandbox. Guest code has zero access to the host — no filesystem, no network, no syscalls. Everything goes through explicit host function imports that you control and meter. The sandbox boundary is the WASM spec itself, which has been formally verified.
+### V8 isolates vs SandCastle
 
-The tradeoff: you get JavaScript, not a full Linux environment. But for AI agent code execution — data transforms, API orchestration, JSON processing — that's all you need.
+V8 isolates are the closest alternative — they're in-process and don't need containers. The tradeoffs:
+
+- **V8 wins on JS compatibility** — full ES2024+, Web APIs, JIT compilation for compute-heavy workloads
+- **SandCastle wins on startup** (0.6ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (857KB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
+
+If you need full Node.js compatibility or heavy compute, use V8. If you need fast, lightweight sandboxes for AI agent code — data transforms, API orchestration, JSON processing — SandCastle is purpose-built for that.
+
+### How the sandbox works
+
+QuickJS (a C JavaScript engine) compiles to WASM and runs *inside* the sandbox. Guest code has zero access to the host — no filesystem, no network, no syscalls. Everything goes through explicit host function imports that you control and meter. The sandbox boundary is the WASM spec itself.
 
 ## Quick Start
 
