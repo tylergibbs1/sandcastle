@@ -141,7 +141,40 @@ async function agent(prompt: string, ct: ReturnType<typeof createCodeTool>): Pro
   throw new Error("Max turns");
 }
 
-function reset() { DB.actions.length = 0; }
+function reset() {
+  DB.actions.length = 0;
+  // Restore employee data to original values
+  const originals = [
+    { id: 1, salary: 145000, level: "senior", dept: "engineering" },
+    { id: 2, salary: 95000, level: "mid", dept: "engineering" },
+    { id: 3, salary: 120000, level: "senior", dept: "sales" },
+    { id: 4, salary: 75000, level: "junior", dept: "sales" },
+    { id: 5, salary: 110000, level: "senior", dept: "marketing" },
+    { id: 6, salary: 165000, level: "staff", dept: "engineering" },
+    { id: 7, salary: 85000, level: "mid", dept: "marketing" },
+    { id: 8, salary: 130000, level: "senior", dept: "engineering" },
+    { id: 9, salary: 140000, level: "senior", dept: "product" },
+    { id: 10, salary: 90000, level: "mid", dept: "product" },
+    { id: 11, salary: 155000, level: "staff", dept: "engineering" },
+    { id: 12, salary: 100000, level: "mid", dept: "sales" },
+  ];
+  for (const o of originals) {
+    const e = DB.employees.find(x => x.id === o.id);
+    if (e) Object.assign(e, o);
+  }
+  // Restore budgets
+  DB.budgets.engineering = 800000;
+  DB.budgets.sales = 400000;
+  DB.budgets.marketing = 250000;
+  DB.budgets.product = 300000;
+  // Restore project budgets/members
+  DB.projects[0].budget = 200000; DB.projects[0].members = [1, 6, 8];
+  DB.projects[1].budget = 150000; DB.projects[1].members = [2, 11];
+  DB.projects[2].budget = 50000; DB.projects[2].status = "completed";
+  DB.projects[3].budget = 100000;
+  DB.projects[4].budget = 75000;
+  DB.projects[5].budget = 300000; DB.projects[5].status = "planning";
+}
 function log(n: string, r: R) { console.log(`  [${r.rt}rt/${r.tc}tc/${r.ms}ms] ${n}: ${r.text.slice(0, 120).replace(/\n/g, " ")}...`); }
 
 // ---------------------------------------------------------------------------

@@ -195,8 +195,8 @@ aws ecr get-login-password | docker login --username AWS --password-stdin <accou
 docker push <account>.dkr.ecr.<region>.amazonaws.com/sandcastle:latest
 # Then create an ECS service pointing to the image
 
-# Fly.io (one command)
-fly launch --image sandcastle --internal-port 8080
+# Fly.io (uses Dockerfile from repo)
+fly launch --internal-port 8080
 
 # Railway / Render
 # Just connect your repo — they auto-detect the Dockerfile
