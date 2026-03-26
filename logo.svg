@@ -1,59 +1,61 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Sand mound base -->
-  <ellipse cx="256" cy="380" rx="175" ry="45" fill="#F5D889"/>
-  <ellipse cx="256" cy="380" rx="175" ry="45" fill="none" stroke="#D4A843" stroke-width="3"/>
+
+  <!-- Shadow base -->
+  <ellipse cx="256" cy="388" rx="155" ry="28" fill="#3f3f46" opacity="0.15"/>
 
   <!-- Castle body -->
-  <path d="M 160 260 L 160 380 Q 256 395 352 380 L 352 260 Z" fill="#F5D889"/>
-  <path d="M 160 260 L 160 380 Q 256 395 352 380 L 352 260" fill="none" stroke="#D4A843" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+  <rect x="155" y="245" width="202" height="140" rx="8" fill="#d4d4d8"/>
+
+  <!-- Body battlements -->
+  <rect x="155" y="225" width="38" height="28" rx="4" fill="#d4d4d8"/>
+  <rect x="210" y="225" width="38" height="28" rx="4" fill="#d4d4d8"/>
+  <rect x="265" y="225" width="38" height="28" rx="4" fill="#d4d4d8"/>
+  <rect x="319" y="225" width="38" height="28" rx="4" fill="#d4d4d8"/>
 
   <!-- Left tower -->
-  <rect x="140" y="175" width="55" height="110" rx="4" fill="#F5D889"/>
-  <rect x="140" y="175" width="55" height="110" rx="4" fill="none" stroke="#D4A843" stroke-width="3"/>
-  <!-- Left tower top -->
-  <path d="M 135 175 L 140 155 L 155 145 L 167 155 L 180 145 L 195 155 L 200 175" fill="#F5D889" stroke="#D4A843" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+  <rect x="130" y="155" width="62" height="232" rx="6" fill="#a1a1aa"/>
+  <rect x="124" y="140" width="74" height="20" rx="4" fill="#d4d4d8"/>
+  <rect x="124" y="118" width="20" height="28" rx="3" fill="#a1a1aa"/>
+  <rect x="151" y="118" width="20" height="28" rx="3" fill="#a1a1aa"/>
+  <rect x="178" y="118" width="20" height="28" rx="3" fill="#a1a1aa"/>
 
   <!-- Right tower -->
-  <rect x="317" y="175" width="55" height="110" rx="4" fill="#F5D889"/>
-  <rect x="317" y="175" width="55" height="110" rx="4" fill="none" stroke="#D4A843" stroke-width="3"/>
-  <!-- Right tower top -->
-  <path d="M 312 175 L 317 155 L 332 145 L 344 155 L 357 145 L 372 155 L 377 175" fill="#F5D889" stroke="#D4A843" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+  <rect x="320" y="155" width="62" height="232" rx="6" fill="#a1a1aa"/>
+  <rect x="314" y="140" width="74" height="20" rx="4" fill="#d4d4d8"/>
+  <rect x="314" y="118" width="20" height="28" rx="3" fill="#a1a1aa"/>
+  <rect x="341" y="118" width="20" height="28" rx="3" fill="#a1a1aa"/>
+  <rect x="368" y="118" width="20" height="28" rx="3" fill="#a1a1aa"/>
 
   <!-- Center tower -->
-  <rect x="220" y="115" width="72" height="170" rx="4" fill="#F5D889"/>
-  <rect x="220" y="115" width="72" height="170" rx="4" fill="none" stroke="#D4A843" stroke-width="3"/>
-  <!-- Center tower top -->
-  <path d="M 214 115 L 220 92 L 236 80 L 256 72 L 276 80 L 292 92 L 298 115" fill="#F5D889" stroke="#D4A843" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
-
-  <!-- Flag on center tower -->
-  <line x1="256" y1="72" x2="256" y2="38" stroke="#D4A843" stroke-width="2.5" stroke-linecap="round"/>
-  <path d="M 256 38 L 280 48 L 256 58" fill="#34D399" stroke="#D4A843" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <rect x="212" y="88" width="88" height="300" rx="6" fill="#a1a1aa"/>
+  <rect x="204" y="70" width="104" height="24" rx="5" fill="#d4d4d8"/>
+  <rect x="204" y="45" width="24" height="32" rx="4" fill="#a1a1aa"/>
+  <rect x="244" y="45" width="24" height="32" rx="4" fill="#a1a1aa"/>
+  <rect x="284" y="45" width="24" height="32" rx="4" fill="#a1a1aa"/>
 
   <!-- Gate arch -->
-  <path d="M 234 380 L 234 325 Q 234 300 256 300 Q 278 300 278 325 L 278 380" fill="#D4A843" stroke="#D4A843" stroke-width="2"/>
+  <path d="M 232 388 L 232 318 A 24 24 0 0 1 280 318 L 280 388 Z" fill="#52525b"/>
 
-  <!-- Terminal cursor in gate -->
-  <text x="244" y="352" font-family="monospace" font-size="16" font-weight="bold" fill="#34D399">&gt;_</text>
+  <!-- Terminal prompt in gate -->
+  <text x="243" y="362" font-family="'SF Mono', 'Fira Code', monospace" font-size="18" font-weight="600" fill="#e4e4e7">&gt;_</text>
 
-  <!-- Face - eyes -->
-  <circle cx="210" cy="230" r="8" fill="#D4A843"/>
-  <circle cx="302" cy="230" r="8" fill="#D4A843"/>
-  <!-- Eye shine -->
-  <circle cx="213" cy="227" r="2.5" fill="#FFF8E7"/>
-  <circle cx="305" cy="227" r="2.5" fill="#FFF8E7"/>
+  <!-- Code brackets on center tower -->
+  <text x="230" y="192" font-family="'SF Mono', 'Fira Code', monospace" font-size="42" font-weight="700" fill="#52525b" opacity="0.8">{</text>
+  <text x="268" y="192" font-family="'SF Mono', 'Fira Code', monospace" font-size="42" font-weight="700" fill="#52525b" opacity="0.8">}</text>
 
-  <!-- Face - smile -->
-  <path d="M 232 252 Q 256 272 280 252" fill="none" stroke="#D4A843" stroke-width="3" stroke-linecap="round"/>
+  <!-- Tower windows -->
+  <rect x="148" y="195" width="14" height="20" rx="7" fill="#71717a" opacity="0.5"/>
+  <rect x="148" y="240" width="14" height="20" rx="7" fill="#71717a" opacity="0.5"/>
+  <rect x="148" y="285" width="14" height="20" rx="7" fill="#71717a" opacity="0.5"/>
+  <rect x="350" y="195" width="14" height="20" rx="7" fill="#71717a" opacity="0.5"/>
+  <rect x="350" y="240" width="14" height="20" rx="7" fill="#71717a" opacity="0.5"/>
+  <rect x="350" y="285" width="14" height="20" rx="7" fill="#71717a" opacity="0.5"/>
 
-  <!-- Cheek blush -->
-  <ellipse cx="198" cy="250" rx="12" ry="8" fill="#F0A8A8" opacity="0.35"/>
-  <ellipse cx="314" cy="250" rx="12" ry="8" fill="#F0A8A8" opacity="0.35"/>
-
-  <!-- Small sand details -->
-  <circle cx="120" cy="390" r="6" fill="#EDD07A" stroke="#D4A843" stroke-width="1.5"/>
-  <circle cx="395" cy="388" r="5" fill="#EDD07A" stroke="#D4A843" stroke-width="1.5"/>
-  <circle cx="100" cy="382" r="3.5" fill="#EDD07A" stroke="#D4A843" stroke-width="1"/>
+  <!-- Shield icon on center tower -->
+  <path d="M 256 210 L 243 218 L 243 233 C 243 244 256 252 256 252 C 256 252 269 244 269 233 L 269 218 Z"
+        fill="none" stroke="#52525b" stroke-width="2.5" stroke-linejoin="round" opacity="0.7"/>
+  <circle cx="256" cy="230" r="4" fill="#52525b" opacity="0.7"/>
 
   <!-- Text -->
-  <text x="256" y="458" text-anchor="middle" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="36" font-weight="700" fill="#D4A843" letter-spacing="2">SandCastle</text>
+  <text x="256" y="440" text-anchor="middle" font-family="system-ui, -apple-system, 'Helvetica Neue', sans-serif" font-size="38" font-weight="800" fill="#3f3f46" letter-spacing="1">SandCastle</text>
 </svg>
