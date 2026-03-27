@@ -80,6 +80,7 @@ impl SandCastle {
         wasm_config.wasm_multi_value(true);
         wasm_config.cranelift_opt_level(wasmtime::OptLevel::Speed);
         wasm_config.memory_init_cow(true);
+        wasm_config.parallel_compilation(true);
 
         let engine = Engine::new(&wasm_config)
             .map_err(|e| SandcastleError::RuntimeInit(e.to_string()))?;
