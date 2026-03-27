@@ -1,10 +1,13 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::types::{CapabilityCall, ConsoleLevel, ConsoleMessage, ExecutionStatus, OutputValue};
+
+/// Fast monotonic counter for execution IDs (avoids UUID v4 RNG overhead).
+static EXECUTION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The full structured transcript of a sandbox execution.
 ///
@@ -50,7 +53,7 @@ impl TranscriptRecorder {
     /// [`Instant`] used to derive relative timestamps.
     pub fn new(fuel_limit: u64, memory_limit_bytes: u64) -> Self {
         Self {
-            execution_id: Uuid::new_v4().to_string(),
+            execution_id: EXECUTION_COUNTER.fetch_add(1, Ordering::Relaxed).to_string(),
             started_at: Utc::now(),
             start_instant: Instant::now(),
             fuel_limit,

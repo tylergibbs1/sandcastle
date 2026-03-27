@@ -86,12 +86,16 @@ pub struct ExecutionRequest {
     pub env: std::collections::HashMap<String, String>,
 }
 
+/// Shared empty capability registry to avoid per-request Arc+HashMap allocation.
+static EMPTY_REGISTRY: std::sync::LazyLock<Arc<CapabilityRegistry>> =
+    std::sync::LazyLock::new(|| Arc::new(CapabilityRegistry::new()));
+
 impl ExecutionRequest {
     pub fn new(code: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             input: serde_json::Value::Null,
-            capabilities: Arc::new(CapabilityRegistry::new()),
+            capabilities: EMPTY_REGISTRY.clone(),
             limits: Limits::default(),
             input_artifacts: vec![],
             on_console: None,
@@ -172,6 +176,8 @@ pub(crate) struct SandboxState {
     pub(crate) output_artifacts: Vec<OutputArtifact>,
     pub(crate) input_artifacts: Vec<Artifact>,
     pub(crate) input_json: serde_json::Value,
+    /// Pre-serialized input bytes for __sandcastle_get_input (avoids re-serializing per call).
+    pub(crate) input_json_bytes: Vec<u8>,
     pub(crate) start_time: Instant,
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) recorder: TranscriptRecorder,
@@ -254,9 +260,13 @@ impl Sandbox {
             limits: store_limits,
             wasi,
             console_messages: Vec::new(),
-            capability_bridge: Some(Arc::new(CapabilityBridge::new(
-                request.capabilities.clone(),
-            ))),
+            capability_bridge: if request.capabilities.capabilities.is_empty() {
+                None
+            } else {
+                Some(Arc::new(CapabilityBridge::new(
+                    request.capabilities.clone(),
+                )))
+            },
             output: OutputValue::Null,
             output_artifacts: Vec::new(),
             input_artifacts: request.input_artifacts,
@@ -279,6 +289,7 @@ impl Sandbox {
                 }
                 input
             },
+            input_json_bytes: Vec::new(), // filled after store creation
             start_time: Instant::now(),
             cancelled: Arc::new(AtomicBool::new(false)),
             recorder,
@@ -288,33 +299,24 @@ impl Sandbox {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
 
-        // Always set fuel. When fuel_limit is 0, use u64::MAX for effectively unlimited.
+        // Set fuel if the engine has fuel metering enabled.
+        // When fuel_limit is 0, use u64::MAX for effectively unlimited.
         let effective_fuel = if fuel_limit > 0 { fuel_limit } else { u64::MAX };
-        store
-            .set_fuel(effective_fuel)
-            .map_err(SandcastleError::Wasm)?;
-        // Set epoch deadline high enough to not immediately trip.
-        // The timeout handler will increment the engine epoch past this.
-        store.set_epoch_deadline(100);
+        let _ = store.set_fuel(effective_fuel);
+
+        // Compute epoch deadline from timeout and the global tick interval.
+        // The background epoch ticker thread increments the epoch every EPOCH_TICK_INTERVAL.
+        let epoch_ticks = (timeout.as_millis() as u64)
+            .checked_div(crate::runtime::EPOCH_TICK_INTERVAL.as_millis() as u64)
+            .unwrap_or(100)
+            .max(1);
+        store.set_epoch_deadline(epoch_ticks);
 
         let instance = self
             .linker
             .instantiate_async(&mut store, &self.module)
             .await
             .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?;
-
-        // Set up epoch-based timeout with a drop guard to ensure cancellation
-        // even on early error returns.
-        let engine_clone = self.engine.clone();
-        let cancelled = store.data().cancelled.clone();
-        let _timeout_guard = AbortOnDrop(tokio::spawn(async move {
-            tokio::time::sleep(timeout).await;
-            cancelled.store(true, Ordering::SeqCst);
-            // Increment the epoch past the store's deadline
-            for _ in 0..200 {
-                engine_clone.increment_epoch();
-            }
-        }));
 
         // Get the evaluate function from the guest
         let evaluate = instance
@@ -340,8 +342,15 @@ impl Sandbox {
             })?;
 
         let code_bytes = request.code.as_bytes();
-        let input_bytes = serde_json::to_vec(&store.data().input_json)
-            .map_err(|e| SandcastleError::Serialization(e.to_string()))?;
+        // Fast path: avoid serde for null input (common case for simple executions)
+        let input_bytes = if store.data().input_json.is_null() {
+            b"null".to_vec()
+        } else {
+            serde_json::to_vec(&store.data().input_json)
+                .map_err(|e| SandcastleError::Serialization(e.to_string()))?
+        };
+        // Cache serialized bytes for __sandcastle_get_input host function
+        store.data_mut().input_json_bytes = input_bytes.clone();
 
         // Allocate and write code
         let code_ptr = alloc
@@ -392,10 +401,7 @@ impl Sandbox {
             )
             .await;
 
-        // _timeout_guard drop will abort the timeout task automatically.
-
         // Determine execution status
-        let was_cancelled = store.data().cancelled.load(Ordering::SeqCst);
 
         let fuel_consumed = effective_fuel.saturating_sub(store.get_fuel().unwrap_or(0));
 
@@ -444,63 +450,59 @@ impl Sandbox {
                 )
             }
             Err(e) => {
-                if was_cancelled {
-                    (ExecutionStatus::Timeout, OutputValue::Null)
-                } else {
-                    // Walk the error chain to find a Trap
-                    let trap = e.downcast_ref::<Trap>().copied().or_else(|| {
-                        e.chain()
-                            .find_map(|cause| cause.downcast_ref::<Trap>().copied())
-                    });
+                // Walk the error chain to find a Trap
+                let trap = e.downcast_ref::<Trap>().copied().or_else(|| {
+                    e.chain()
+                        .find_map(|cause| cause.downcast_ref::<Trap>().copied())
+                });
 
-                    // Check if any error in the chain mentions memory growth failure
-                    let is_memory_error = e.chain().any(|cause| {
-                        let msg = cause.to_string();
-                        msg.contains("forcing trap when growing memory")
-                            || msg.contains("memory minimum size")
-                    });
+                // Check if any error in the chain mentions memory growth failure
+                let is_memory_error = e.chain().any(|cause| {
+                    let msg = cause.to_string();
+                    msg.contains("forcing trap when growing memory")
+                        || msg.contains("memory minimum size")
+                });
 
-                    if is_memory_error {
-                        (ExecutionStatus::MemoryExceeded, OutputValue::Null)
-                    } else if let Some(trap) = trap {
-                        match trap {
-                            Trap::OutOfFuel => {
-                                (ExecutionStatus::FuelExhausted, OutputValue::Null)
-                            }
-                            Trap::Interrupt => {
-                                (ExecutionStatus::Timeout, OutputValue::Null)
-                            }
-                            Trap::UnreachableCodeReached => {
-                                // Often caused by memory allocation failure in the guest.
-                                // Check if we're close to the memory limit.
-                                let usage_ratio =
-                                    peak_memory as f64 / memory_limit as f64;
-                                if usage_ratio > 0.85 {
-                                    (ExecutionStatus::MemoryExceeded, OutputValue::Null)
-                                } else {
-                                    (
-                                        ExecutionStatus::GuestError {
-                                            message: format!("WASM trap: {trap}"),
-                                        },
-                                        OutputValue::Null,
-                                    )
-                                }
-                            }
-                            _ => (
-                                ExecutionStatus::GuestError {
-                                    message: format!("WASM trap: {trap}"),
-                                },
-                                OutputValue::Null,
-                            ),
+                if is_memory_error {
+                    (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                } else if let Some(trap) = trap {
+                    match trap {
+                        Trap::OutOfFuel => {
+                            (ExecutionStatus::FuelExhausted, OutputValue::Null)
                         }
-                    } else {
-                        (
+                        Trap::Interrupt => {
+                            // Epoch deadline exceeded = timeout
+                            (ExecutionStatus::Timeout, OutputValue::Null)
+                        }
+                        Trap::UnreachableCodeReached => {
+                            // Often caused by memory allocation failure in the guest.
+                            let usage_ratio =
+                                peak_memory as f64 / memory_limit as f64;
+                            if usage_ratio > 0.85 {
+                                (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                            } else {
+                                (
+                                    ExecutionStatus::GuestError {
+                                        message: format!("WASM trap: {trap}"),
+                                    },
+                                    OutputValue::Null,
+                                )
+                            }
+                        }
+                        _ => (
                             ExecutionStatus::GuestError {
-                                message: e.to_string(),
+                                message: format!("WASM trap: {trap}"),
                             },
                             OutputValue::Null,
-                        )
+                        ),
                     }
+                } else {
+                    (
+                        ExecutionStatus::GuestError {
+                            message: e.to_string(),
+                        },
+                        OutputValue::Null,
+                    )
                 }
             }
         };
@@ -605,19 +607,21 @@ impl Sandbox {
                 "sandcastle",
                 "__sandcastle_get_input",
                 |mut caller: Caller<'_, SandboxState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                    let input = serde_json::to_vec(&caller.data().input_json).unwrap_or_default();
+                    // Use pre-serialized bytes to avoid re-serializing per call.
+                    // Clone the bytes to release the borrow on caller before writing.
+                    let input_bytes = caller.data().input_json_bytes.clone();
                     let memory = get_memory!(caller);
                     let safe_len = validated_len(buf_len);
-                    let copy_len = input.len().min(safe_len);
+                    let copy_len = input_bytes.len().min(safe_len);
                     if copy_len > 0 {
                         if memory
-                            .write(&mut caller, buf_ptr as usize, &input[..copy_len])
+                            .write(&mut caller, buf_ptr as usize, &input_bytes[..copy_len])
                             .is_err()
                         {
                             return -1;
                         }
                     }
-                    input.len() as i32
+                    input_bytes.len() as i32
                 },
             )
             .map_err(|e| SandcastleError::RuntimeInit(e.to_string()))?;
@@ -900,6 +904,7 @@ impl PersistentSandbox {
             output_artifacts: Vec::new(),
             input_artifacts: vec![],
             input_json: serde_json::Value::Null,
+            input_json_bytes: b"null".to_vec(),
             start_time: Instant::now(),
             cancelled: Arc::new(AtomicBool::new(false)),
             recorder,
@@ -908,7 +913,7 @@ impl PersistentSandbox {
 
         let mut store = Store::new(engine, state);
         store.limiter(|state| &mut state.limits);
-        store.set_fuel(fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        let _ = store.set_fuel(fuel_per_turn);
         store.set_epoch_deadline(100);
 
         let instance = linker
@@ -950,7 +955,7 @@ impl PersistentSandbox {
         // Refuel for subsequent calls
         let remaining = store.get_fuel().unwrap_or(0);
         if remaining < fuel_per_turn {
-            store.set_fuel(fuel_per_turn).map_err(SandcastleError::Wasm)?;
+            let _ = store.set_fuel(fuel_per_turn);
         }
 
         Ok(Self {
@@ -991,11 +996,12 @@ impl PersistentSandbox {
         self.store.data_mut().output_artifacts.clear();
         self.store.data_mut().console_messages.clear();
         self.store.data_mut().input_json = input.clone();
+        self.store.data_mut().input_json_bytes = serde_json::to_vec(&input).unwrap_or_default();
         self.store.data_mut().start_time = Instant::now();
         self.store.data_mut().cancelled.store(false, Ordering::SeqCst);
 
         // Refuel
-        self.store.set_fuel(self.fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        let _ = self.store.set_fuel(self.fuel_per_turn);
         self.store.set_epoch_deadline(100);
 
         // Set up timeout
