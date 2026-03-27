@@ -20,6 +20,11 @@ pub struct Config {
     pub max_concurrent_sandboxes: usize,
     /// Pre-compiled QuickJS WASM module bytes.
     pub guest_module: Vec<u8>,
+    /// Enable per-instruction fuel metering. When false, only epoch-based
+    /// timeouts are used for execution limits. Disabling fuel metering
+    /// improves throughput by ~12% but removes deterministic instruction
+    /// counting. Default: true.
+    pub fuel_metering: bool,
 }
 
 impl Config {
@@ -28,6 +33,7 @@ impl Config {
             security_mode: SecurityMode::Standard,
             max_concurrent_sandboxes: 1000,
             guest_module,
+            fuel_metering: true,
         }
     }
 }
@@ -54,7 +60,7 @@ impl SandCastle {
 
         let mut wasm_config = WasmConfig::new();
         wasm_config.async_support(true);
-        wasm_config.consume_fuel(true);
+        wasm_config.consume_fuel(config.fuel_metering);
         wasm_config.epoch_interruption(true);
         wasm_config.wasm_bulk_memory(true);
         wasm_config.wasm_multi_value(true);

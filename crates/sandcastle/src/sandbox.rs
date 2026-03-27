@@ -288,11 +288,10 @@ impl Sandbox {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
 
-        // Always set fuel. When fuel_limit is 0, use u64::MAX for effectively unlimited.
+        // Set fuel if the engine has fuel metering enabled.
+        // When fuel_limit is 0, use u64::MAX for effectively unlimited.
         let effective_fuel = if fuel_limit > 0 { fuel_limit } else { u64::MAX };
-        store
-            .set_fuel(effective_fuel)
-            .map_err(SandcastleError::Wasm)?;
+        let _ = store.set_fuel(effective_fuel);
         // Set epoch deadline high enough to not immediately trip.
         // The timeout handler will increment the engine epoch past this.
         store.set_epoch_deadline(100);
@@ -908,7 +907,7 @@ impl PersistentSandbox {
 
         let mut store = Store::new(engine, state);
         store.limiter(|state| &mut state.limits);
-        store.set_fuel(fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        let _ = store.set_fuel(fuel_per_turn);
         store.set_epoch_deadline(100);
 
         let instance = linker
@@ -950,7 +949,7 @@ impl PersistentSandbox {
         // Refuel for subsequent calls
         let remaining = store.get_fuel().unwrap_or(0);
         if remaining < fuel_per_turn {
-            store.set_fuel(fuel_per_turn).map_err(SandcastleError::Wasm)?;
+            let _ = store.set_fuel(fuel_per_turn);
         }
 
         Ok(Self {
@@ -995,7 +994,7 @@ impl PersistentSandbox {
         self.store.data_mut().cancelled.store(false, Ordering::SeqCst);
 
         // Refuel
-        self.store.set_fuel(self.fuel_per_turn).map_err(SandcastleError::Wasm)?;
+        let _ = self.store.set_fuel(self.fuel_per_turn);
         self.store.set_epoch_deadline(100);
 
         // Set up timeout
