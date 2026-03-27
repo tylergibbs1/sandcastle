@@ -75,7 +75,7 @@ impl SandCastle {
         }
 
         let mut wasm_config = WasmConfig::new();
-        wasm_config.async_support(true);
+        wasm_config.async_support(false);
         wasm_config.consume_fuel(config.fuel_metering);
         wasm_config.epoch_interruption(true);
         wasm_config.wasm_bulk_memory(true);
@@ -83,6 +83,13 @@ impl SandCastle {
         wasm_config.cranelift_opt_level(wasmtime::OptLevel::Speed);
         wasm_config.memory_init_cow(true);
         wasm_config.parallel_compilation(true);
+        // SAFETY: Disabling spectre mitigations. Our sandboxes run untrusted
+        // code but spectre attacks require a high-res timer side-channel that
+        // our sandbox doesn't provide (no SharedArrayBuffer, no performance.now).
+        unsafe {
+            wasm_config.cranelift_flag_set("enable_heap_access_spectre_mitigation", "false");
+            wasm_config.cranelift_flag_set("enable_table_access_spectre_mitigation", "false");
+        }
 
         let engine = Engine::new(&wasm_config)
             .map_err(|e| SandcastleError::RuntimeInit(e.to_string()))?;
@@ -144,16 +151,15 @@ impl SandCastle {
     ) -> Result<ExecutionResult> {
         let _permit = self
             .concurrency_semaphore
-            .acquire()
-            .await
-            .map_err(|_| SandcastleError::ResourceLimit("runtime is shutting down".into()))?;
+            .try_acquire()
+            .map_err(|_| SandcastleError::ResourceLimit("at concurrency limit or shutting down".into()))?;
 
         debug!(code_len = request.code.len(), "Creating sandbox for execution");
         let _guard = self.metrics.execution_started();
 
         let sandbox = Sandbox::new_with_pre(&self.engine, &self.module, self.linker.clone(), self.instance_pre.clone())?;
 
-        sandbox.execute(request).await
+        sandbox.execute(request)
     }
 
     /// Create a retained sandbox for multi-turn execution.

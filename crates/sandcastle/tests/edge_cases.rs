@@ -1529,10 +1529,10 @@ mod runtime_metrics {
         let runtime = require_runtime!();
         let sandbox = runtime.create_sandbox().unwrap();
 
-        sandbox.execute(ExecutionRequest::new("return 1;")).await.unwrap();
+        sandbox.execute(ExecutionRequest::new("return 1;")).unwrap();
         assert_eq!(runtime.metrics().total(), 1);
 
-        sandbox.execute(ExecutionRequest::new("return 2;")).await.unwrap();
+        sandbox.execute(ExecutionRequest::new("return 2;")).unwrap();
         assert_eq!(runtime.metrics().total(), 2);
     }
 

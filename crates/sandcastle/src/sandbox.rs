@@ -179,7 +179,8 @@ pub(crate) struct SandboxState {
     /// Pre-serialized input bytes for __sandcastle_get_input (avoids re-serializing per call).
     pub(crate) input_json_bytes: Vec<u8>,
     pub(crate) start_time: Instant,
-    pub(crate) cancelled: Arc<AtomicBool>,
+    /// Only allocated for PersistentSandbox (used for cancel signaling).
+    pub(crate) cancelled: Option<Arc<AtomicBool>>,
     pub(crate) recorder: TranscriptRecorder,
     pub(crate) on_console: Option<ConsoleCallback>,
 }
@@ -244,7 +245,7 @@ impl Sandbox {
     pub(crate) fn build_linker(engine: &Engine) -> Result<Linker<SandboxState>> {
         let mut linker: Linker<SandboxState> = Linker::new(engine);
 
-        wasmtime_wasi::preview1::add_to_linker_async(
+        wasmtime_wasi::preview1::add_to_linker_sync(
             &mut linker,
             |state: &mut SandboxState| &mut state.wasi,
         )
@@ -256,7 +257,7 @@ impl Sandbox {
     }
 
     /// Execute code in this sandbox.
-    pub async fn execute(&self, request: ExecutionRequest) -> Result<ExecutionResult> {
+    pub fn execute(&self, request: ExecutionRequest) -> Result<ExecutionResult> {
         let _metrics_guard = self.metrics.as_ref().map(|m| m.execution_started());
         let fuel_limit = request.limits.fuel;
         let memory_limit = (request.limits.memory_mb as u64) * 1024 * 1024;
@@ -310,7 +311,7 @@ impl Sandbox {
             },
             input_json_bytes: Vec::new(), // filled after store creation
             start_time: Instant::now(),
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: None,
             recorder,
             on_console,
         };
@@ -333,13 +334,11 @@ impl Sandbox {
 
         // Use InstancePre when available (skips import resolution per-instantiation).
         let instance = if let Some(pre) = &self.instance_pre {
-            pre.instantiate_async(&mut store)
-                .await
+            pre.instantiate(&mut store)
                 .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?
         } else {
             self.linker
-                .instantiate_async(&mut store, &self.module)
-                .await
+                .instantiate(&mut store, &self.module)
                 .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?
         };
 
@@ -374,34 +373,28 @@ impl Sandbox {
             serde_json::to_vec(&store.data().input_json)
                 .map_err(|e| SandcastleError::Serialization(e.to_string()))?
         };
-        // Cache serialized bytes for __sandcastle_get_input host function
-        store.data_mut().input_json_bytes = input_bytes.clone();
+        // Note: input_json_bytes is only used by __sandcastle_get_input host function,
+        // which the current guest never calls (input is passed via evaluate params).
+        // Skip the clone to avoid unnecessary allocation.
 
-        // Allocate and write code
-        let code_ptr = alloc
-            .call_async(&mut store, code_bytes.len() as i32)
-            .await
+        // Single allocation for code+input contiguously
+        let total_len = code_bytes.len() + input_bytes.len();
+        let base_ptr = alloc
+            .call(&mut store, total_len as i32)
             .map_err(|e| {
                 SandcastleError::Execution(ExecutionError::GuestError {
                     message: format!("alloc failed: {e}"),
                 })
             })?;
+
+        let code_ptr = base_ptr;
+        let input_ptr = base_ptr + code_bytes.len() as i32;
 
         memory
             .write(&mut store, code_ptr as usize, code_bytes)
             .map_err(|e| {
                 SandcastleError::Execution(ExecutionError::GuestError {
                     message: format!("memory write failed: {e}"),
-                })
-            })?;
-
-        // Allocate and write input
-        let input_ptr = alloc
-            .call_async(&mut store, input_bytes.len() as i32)
-            .await
-            .map_err(|e| {
-                SandcastleError::Execution(ExecutionError::GuestError {
-                    message: format!("alloc failed: {e}"),
                 })
             })?;
 
@@ -415,7 +408,7 @@ impl Sandbox {
 
         // Call evaluate
         let result = evaluate
-            .call_async(
+            .call(
                 &mut store,
                 (
                     code_ptr,
@@ -423,8 +416,7 @@ impl Sandbox {
                     input_ptr,
                     input_bytes.len() as i32,
                 ),
-            )
-            .await;
+            );
 
         // Determine execution status
 
@@ -931,7 +923,7 @@ impl PersistentSandbox {
             input_json: serde_json::Value::Null,
             input_json_bytes: b"null".to_vec(),
             start_time: Instant::now(),
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: Some(Arc::new(AtomicBool::new(false))),
             recorder,
             on_console: None,
         };
@@ -942,8 +934,7 @@ impl PersistentSandbox {
         store.set_epoch_deadline(100);
 
         let instance = linker
-            .instantiate_async(&mut store, module)
-            .await
+            .instantiate(&mut store, module)
             .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?;
 
         let evaluate = instance
@@ -962,20 +953,19 @@ impl PersistentSandbox {
         let init_code = b"return null;";
         let init_input = b"null";
 
-        let code_ptr = alloc.call_async(&mut store, init_code.len() as i32).await
+        let code_ptr = alloc.call(&mut store, init_code.len() as i32)
             .map_err(|e| SandcastleError::SandboxCreation(format!("init alloc failed: {e}")))?;
         memory.write(&mut store, code_ptr as usize, init_code)
             .map_err(|e| SandcastleError::SandboxCreation(format!("init write failed: {e}")))?;
 
-        let input_ptr = alloc.call_async(&mut store, init_input.len() as i32).await
+        let input_ptr = alloc.call(&mut store, init_input.len() as i32)
             .map_err(|e| SandcastleError::SandboxCreation(format!("init alloc failed: {e}")))?;
         memory.write(&mut store, input_ptr as usize, init_input)
             .map_err(|e| SandcastleError::SandboxCreation(format!("init write failed: {e}")))?;
 
         // Initialize QuickJS runtime
         let _ = evaluate
-            .call_async(&mut store, (code_ptr, init_code.len() as i32, input_ptr, init_input.len() as i32))
-            .await;
+            .call(&mut store, (code_ptr, init_code.len() as i32, input_ptr, init_input.len() as i32));
 
         // Refuel for subsequent calls
         let remaining = store.get_fuel().unwrap_or(0);
@@ -1023,7 +1013,7 @@ impl PersistentSandbox {
         self.store.data_mut().input_json = input.clone();
         self.store.data_mut().input_json_bytes = serde_json::to_vec(&input).unwrap_or_default();
         self.store.data_mut().start_time = Instant::now();
-        self.store.data_mut().cancelled.store(false, Ordering::SeqCst);
+        self.store.data_mut().cancelled.as_ref().unwrap().store(false, Ordering::SeqCst);
 
         // Refuel
         let _ = self.store.set_fuel(self.fuel_per_turn);
@@ -1031,7 +1021,7 @@ impl PersistentSandbox {
 
         // Set up timeout
         let engine_clone = self.engine.clone();
-        let cancelled = self.store.data().cancelled.clone();
+        let cancelled = self.store.data().cancelled.as_ref().unwrap().clone();
         let _timeout_guard = AbortOnDrop(tokio::spawn(async move {
             tokio::time::sleep(timeout).await;
             cancelled.store(true, Ordering::SeqCst);
@@ -1046,8 +1036,7 @@ impl PersistentSandbox {
 
         // Allocate and write code
         let code_ptr = self.alloc
-            .call_async(&mut self.store, code_bytes.len() as i32)
-            .await
+            .call(&mut self.store, code_bytes.len() as i32)
             .map_err(|e| SandcastleError::Execution(ExecutionError::GuestError {
                 message: format!("alloc failed: {e}"),
             }))?;
@@ -1058,8 +1047,7 @@ impl PersistentSandbox {
 
         // Allocate and write input
         let input_ptr = self.alloc
-            .call_async(&mut self.store, input_bytes.len() as i32)
-            .await
+            .call(&mut self.store, input_bytes.len() as i32)
             .map_err(|e| SandcastleError::Execution(ExecutionError::GuestError {
                 message: format!("alloc failed: {e}"),
             }))?;
@@ -1070,13 +1058,12 @@ impl PersistentSandbox {
 
         // Call evaluate
         let result = self.evaluate
-            .call_async(
+            .call(
                 &mut self.store,
                 (code_ptr, code_bytes.len() as i32, input_ptr, input_bytes.len() as i32),
-            )
-            .await;
+            );
 
-        let was_cancelled = self.store.data().cancelled.load(Ordering::SeqCst);
+        let was_cancelled = self.store.data().cancelled.as_ref().map_or(false, |c| c.load(Ordering::SeqCst));
         let fuel_consumed = self.fuel_per_turn.saturating_sub(
             self.store.get_fuel().unwrap_or(0),
         );

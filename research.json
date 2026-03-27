@@ -1,0 +1,27 @@
+{
+  "tag": "mar26",
+  "modifiable_files": [
+    "crates/sandcastle/src/runtime.rs",
+    "crates/sandcastle/src/sandbox.rs"
+  ],
+  "readonly_files": [
+    "crates/sandcastle/benches/sandbox.rs",
+    "crates/sandcastle/src/capability.rs",
+    "crates/sandcastle/src/limits.rs",
+    "crates/sandcastle/src/transcript.rs",
+    "crates/sandcastle/src/pool.rs",
+    "crates/sandcastle/src/types.rs",
+    "crates/sandcastle/Cargo.toml"
+  ],
+  "run_command": "cargo bench --bench sandbox 2>&1",
+  "metric_grep": "^  Ops/sec:",
+  "metric_name": "ops_sec",
+  "metric_direction": "higher",
+  "secondary_metrics": [
+    "Simple expression.*Ops/sec:"
+  ],
+  "timeout_seconds": 300,
+  "setup_check": "cargo build --release 2>&1 | tail -1",
+  "no_new_dependencies": true,
+  "soft_constraints": "Don't break any existing tests. Keep code clean — tiny gain + ugly complexity = not worth it."
+}
