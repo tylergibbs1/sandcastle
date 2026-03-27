@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
-use wasmtime::{Config as WasmConfig, Engine, InstancePre, Linker, Module};
+use wasmtime::{Config as WasmConfig, Engine, InstanceAllocationStrategy, InstancePre, Linker, Module, PoolingAllocationConfig};
 
 use crate::capability::CapabilityRegistry;
 use crate::error::{Result, SandcastleError};
@@ -83,6 +83,25 @@ impl SandCastle {
         wasm_config.cranelift_opt_level(wasmtime::OptLevel::Speed);
         wasm_config.memory_init_cow(true);
         wasm_config.parallel_compilation(true);
+        // Pooling allocator with affine slot reuse: after the first instantiation
+        // of a module, subsequent instantiations reuse the same pre-configured slot,
+        // resetting memory via memset instead of mmap/munmap syscalls.
+        // (arxiv-informed: Wasmtime 1.0 performance article + pooling docs)
+        let mut pool = PoolingAllocationConfig::default();
+        let pool_size = config.max_concurrent_sandboxes.min(100) as u32;
+        pool.total_memories(pool_size);
+        pool.total_tables(pool_size);
+        pool.max_memory_size(32 * 1024 * 1024);
+        pool.total_stacks(0); // No async stacks needed (sync execution)
+        pool.total_core_instances(pool_size);
+        pool.max_unused_warm_slots(0); // Aggressively reuse affine slots
+        // Use memset instead of madvise to reset memory — keeps pages resident,
+        // avoiding page faults on reuse. Set to 2MB to cover the wized module's
+        // initialized data segment without excessive memset cost.
+        pool.linear_memory_keep_resident(2 * 1024 * 1024);
+        pool.table_keep_resident(4096);
+        wasm_config.allocation_strategy(InstanceAllocationStrategy::Pooling(pool));
+
         // SAFETY: Disabling spectre mitigations. Our sandboxes run untrusted
         // code but spectre attacks require a high-res timer side-channel that
         // our sandbox doesn't provide (no SharedArrayBuffer, no performance.now).
