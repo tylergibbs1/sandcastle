@@ -34,8 +34,15 @@ impl Config {
             security_mode: SecurityMode::Standard,
             max_concurrent_sandboxes: 1000,
             guest_module,
-            fuel_metering: true,
+            fuel_metering: false,
         }
+    }
+
+    /// Enable per-instruction fuel metering for deterministic instruction counting.
+    /// This reduces throughput by ~12% but enables precise `fuel_consumed` in transcripts.
+    pub fn with_fuel_metering(mut self, enabled: bool) -> Self {
+        self.fuel_metering = enabled;
+        self
     }
 }
 
