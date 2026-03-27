@@ -258,9 +258,13 @@ impl Sandbox {
             limits: store_limits,
             wasi,
             console_messages: Vec::new(),
-            capability_bridge: Some(Arc::new(CapabilityBridge::new(
-                request.capabilities.clone(),
-            ))),
+            capability_bridge: if request.capabilities.capabilities.is_empty() {
+                None
+            } else {
+                Some(Arc::new(CapabilityBridge::new(
+                    request.capabilities.clone(),
+                )))
+            },
             output: OutputValue::Null,
             output_artifacts: Vec::new(),
             input_artifacts: request.input_artifacts,
