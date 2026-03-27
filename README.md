@@ -102,7 +102,7 @@ This approach is validated by recent academic work:
 
 SandCastle's performance is the result of systematic research informed by academic literature:
 
-- **[Wasm-level snapshotting](https://bytecodealliance.org/articles/making-javascript-run-fast-on-webassembly)** — Pre-initializing the QuickJS runtime, polyfills, and static bridge code via wizer eliminates ~2ms of per-execution JS engine startup, yielding a **30x throughput improvement** (483 → 15,000 ops/sec).
+- **[Wasm-level snapshotting](https://bytecodealliance.org/articles/making-javascript-run-fast-on-webassembly)** — Pre-initializing the QuickJS runtime, polyfills, and static bridge code via wizer eliminates ~2ms of per-execution JS engine startup, yielding a **49x throughput improvement** (338 → 16,500 ops/sec).
 - **[Spectre mitigation analysis](https://arxiv.org/html/2404.12621v1)** — Disabling Cranelift's spectre mitigations for heap/table access (safe because our sandbox lacks high-resolution timing side-channels) provides a **23% throughput improvement**.
 - **Synchronous WASM execution** — Switching from async to sync Wasmtime calls eliminates stack-switching overhead for the sequential execution path.
 - **Copy-on-write instantiation** — Wasmtime's `memory_init_cow` + `InstancePre` pre-linking enables microsecond-scale instance creation from a pre-compiled module template.

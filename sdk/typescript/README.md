@@ -91,7 +91,7 @@ const key = process.env.API_KEY;      // Injected by host via .with_env()
 
 ## Features
 
-- Sub-millisecond sandbox creation (~600us, 1,700 ops/sec sustained)
+- ~61µs sandbox creation (16,500 ops/sec sustained)
 - ES2024+ support (QuickJS-NG) — `Object.groupBy`, `Set.intersection`, iterator helpers
 - Fuel metering, memory limits, wall-clock timeouts
 - Host capability bridge (KV, HTTP, custom) with quota enforcement
