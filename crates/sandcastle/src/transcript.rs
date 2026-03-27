@@ -52,10 +52,13 @@ impl TranscriptRecorder {
     /// Create a new recorder. Captures `started_at` and the monotonic
     /// [`Instant`] used to derive relative timestamps.
     pub fn new(fuel_limit: u64, memory_limit_bytes: u64) -> Self {
+        // Capture both clocks together to minimize drift between them.
+        let now_utc = Utc::now();
+        let now_instant = Instant::now();
         Self {
             execution_id: EXECUTION_COUNTER.fetch_add(1, Ordering::Relaxed).to_string(),
-            started_at: Utc::now(),
-            start_instant: Instant::now(),
+            started_at: now_utc,
+            start_instant: now_instant,
             fuel_limit,
             memory_limit_bytes,
             fuel_consumed: 0,
@@ -113,10 +116,13 @@ impl TranscriptRecorder {
     /// Consume the recorder, set `finished_at`, and build the final
     /// [`ExecutionTranscript`].
     pub fn finalize(self, status: ExecutionStatus) -> ExecutionTranscript {
+        // Derive finished_at from monotonic elapsed to avoid a second syscall.
+        let elapsed = self.start_instant.elapsed();
+        let finished_at = self.started_at + chrono::Duration::from_std(elapsed).unwrap_or_default();
         ExecutionTranscript {
             execution_id: self.execution_id,
             started_at: self.started_at,
-            finished_at: Some(Utc::now()),
+            finished_at: Some(finished_at),
             status,
             fuel_consumed: self.fuel_consumed,
             fuel_limit: self.fuel_limit,
