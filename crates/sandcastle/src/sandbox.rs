@@ -189,6 +189,8 @@ pub struct Sandbox {
     engine: Engine,
     module: Module,
     linker: Arc<Linker<SandboxState>>,
+    /// Pre-linked instance for faster instantiation (skips import resolution).
+    instance_pre: Option<Arc<wasmtime::InstancePre<SandboxState>>>,
     metrics: Option<Arc<crate::pool::PoolMetrics>>,
 }
 
@@ -202,6 +204,22 @@ impl Sandbox {
             engine: engine.clone(),
             module: module.clone(),
             linker,
+            instance_pre: None,
+            metrics: None,
+        })
+    }
+
+    pub(crate) fn new_with_pre(
+        engine: &Engine,
+        module: &Module,
+        linker: Arc<Linker<SandboxState>>,
+        instance_pre: Arc<wasmtime::InstancePre<SandboxState>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            engine: engine.clone(),
+            module: module.clone(),
+            linker,
+            instance_pre: Some(instance_pre),
             metrics: None,
         })
     }
@@ -216,6 +234,7 @@ impl Sandbox {
             engine: engine.clone(),
             module: module.clone(),
             linker,
+            instance_pre: None,
             metrics: Some(metrics),
         })
     }
@@ -312,11 +331,17 @@ impl Sandbox {
             .max(1);
         store.set_epoch_deadline(epoch_ticks);
 
-        let instance = self
-            .linker
-            .instantiate_async(&mut store, &self.module)
-            .await
-            .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?;
+        // Use InstancePre when available (skips import resolution per-instantiation).
+        let instance = if let Some(pre) = &self.instance_pre {
+            pre.instantiate_async(&mut store)
+                .await
+                .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?
+        } else {
+            self.linker
+                .instantiate_async(&mut store, &self.module)
+                .await
+                .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?
+        };
 
         // Get the evaluate function from the guest
         let evaluate = instance
