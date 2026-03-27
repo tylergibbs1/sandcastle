@@ -292,28 +292,20 @@ impl Sandbox {
         // When fuel_limit is 0, use u64::MAX for effectively unlimited.
         let effective_fuel = if fuel_limit > 0 { fuel_limit } else { u64::MAX };
         let _ = store.set_fuel(effective_fuel);
-        // Set epoch deadline high enough to not immediately trip.
-        // The timeout handler will increment the engine epoch past this.
-        store.set_epoch_deadline(100);
+
+        // Compute epoch deadline from timeout and the global tick interval.
+        // The background epoch ticker thread increments the epoch every EPOCH_TICK_INTERVAL.
+        let epoch_ticks = (timeout.as_millis() as u64)
+            .checked_div(crate::runtime::EPOCH_TICK_INTERVAL.as_millis() as u64)
+            .unwrap_or(100)
+            .max(1);
+        store.set_epoch_deadline(epoch_ticks);
 
         let instance = self
             .linker
             .instantiate_async(&mut store, &self.module)
             .await
             .map_err(|e| SandcastleError::SandboxCreation(e.to_string()))?;
-
-        // Set up epoch-based timeout with a drop guard to ensure cancellation
-        // even on early error returns.
-        let engine_clone = self.engine.clone();
-        let cancelled = store.data().cancelled.clone();
-        let _timeout_guard = AbortOnDrop(tokio::spawn(async move {
-            tokio::time::sleep(timeout).await;
-            cancelled.store(true, Ordering::SeqCst);
-            // Increment the epoch past the store's deadline
-            for _ in 0..200 {
-                engine_clone.increment_epoch();
-            }
-        }));
 
         // Get the evaluate function from the guest
         let evaluate = instance
@@ -391,10 +383,7 @@ impl Sandbox {
             )
             .await;
 
-        // _timeout_guard drop will abort the timeout task automatically.
-
         // Determine execution status
-        let was_cancelled = store.data().cancelled.load(Ordering::SeqCst);
 
         let fuel_consumed = effective_fuel.saturating_sub(store.get_fuel().unwrap_or(0));
 
@@ -443,63 +432,59 @@ impl Sandbox {
                 )
             }
             Err(e) => {
-                if was_cancelled {
-                    (ExecutionStatus::Timeout, OutputValue::Null)
-                } else {
-                    // Walk the error chain to find a Trap
-                    let trap = e.downcast_ref::<Trap>().copied().or_else(|| {
-                        e.chain()
-                            .find_map(|cause| cause.downcast_ref::<Trap>().copied())
-                    });
+                // Walk the error chain to find a Trap
+                let trap = e.downcast_ref::<Trap>().copied().or_else(|| {
+                    e.chain()
+                        .find_map(|cause| cause.downcast_ref::<Trap>().copied())
+                });
 
-                    // Check if any error in the chain mentions memory growth failure
-                    let is_memory_error = e.chain().any(|cause| {
-                        let msg = cause.to_string();
-                        msg.contains("forcing trap when growing memory")
-                            || msg.contains("memory minimum size")
-                    });
+                // Check if any error in the chain mentions memory growth failure
+                let is_memory_error = e.chain().any(|cause| {
+                    let msg = cause.to_string();
+                    msg.contains("forcing trap when growing memory")
+                        || msg.contains("memory minimum size")
+                });
 
-                    if is_memory_error {
-                        (ExecutionStatus::MemoryExceeded, OutputValue::Null)
-                    } else if let Some(trap) = trap {
-                        match trap {
-                            Trap::OutOfFuel => {
-                                (ExecutionStatus::FuelExhausted, OutputValue::Null)
-                            }
-                            Trap::Interrupt => {
-                                (ExecutionStatus::Timeout, OutputValue::Null)
-                            }
-                            Trap::UnreachableCodeReached => {
-                                // Often caused by memory allocation failure in the guest.
-                                // Check if we're close to the memory limit.
-                                let usage_ratio =
-                                    peak_memory as f64 / memory_limit as f64;
-                                if usage_ratio > 0.85 {
-                                    (ExecutionStatus::MemoryExceeded, OutputValue::Null)
-                                } else {
-                                    (
-                                        ExecutionStatus::GuestError {
-                                            message: format!("WASM trap: {trap}"),
-                                        },
-                                        OutputValue::Null,
-                                    )
-                                }
-                            }
-                            _ => (
-                                ExecutionStatus::GuestError {
-                                    message: format!("WASM trap: {trap}"),
-                                },
-                                OutputValue::Null,
-                            ),
+                if is_memory_error {
+                    (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                } else if let Some(trap) = trap {
+                    match trap {
+                        Trap::OutOfFuel => {
+                            (ExecutionStatus::FuelExhausted, OutputValue::Null)
                         }
-                    } else {
-                        (
+                        Trap::Interrupt => {
+                            // Epoch deadline exceeded = timeout
+                            (ExecutionStatus::Timeout, OutputValue::Null)
+                        }
+                        Trap::UnreachableCodeReached => {
+                            // Often caused by memory allocation failure in the guest.
+                            let usage_ratio =
+                                peak_memory as f64 / memory_limit as f64;
+                            if usage_ratio > 0.85 {
+                                (ExecutionStatus::MemoryExceeded, OutputValue::Null)
+                            } else {
+                                (
+                                    ExecutionStatus::GuestError {
+                                        message: format!("WASM trap: {trap}"),
+                                    },
+                                    OutputValue::Null,
+                                )
+                            }
+                        }
+                        _ => (
                             ExecutionStatus::GuestError {
-                                message: e.to_string(),
+                                message: format!("WASM trap: {trap}"),
                             },
                             OutputValue::Null,
-                        )
+                        ),
                     }
+                } else {
+                    (
+                        ExecutionStatus::GuestError {
+                            message: e.to_string(),
+                        },
+                        OutputValue::Null,
+                    )
                 }
             }
         };

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
@@ -38,6 +39,10 @@ impl Config {
     }
 }
 
+/// Interval at which the epoch ticker thread increments the engine epoch.
+/// Stores compute their deadline as `timeout / EPOCH_TICK_INTERVAL`.
+pub(crate) const EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(2);
+
 /// The SandCastle runtime. Create once at application startup.
 pub struct SandCastle {
     engine: Engine,
@@ -47,6 +52,8 @@ pub struct SandCastle {
     security_mode: SecurityMode,
     concurrency_semaphore: Arc<Semaphore>,
     metrics: Arc<PoolMetrics>,
+    /// Handle to the epoch ticker thread. Dropped when the runtime is dropped.
+    _epoch_ticker: std::thread::JoinHandle<()>,
 }
 
 impl SandCastle {
@@ -83,6 +90,17 @@ impl SandCastle {
             "SandCastle runtime initialized"
         );
 
+        // Start a background thread that ticks the engine epoch at a fixed interval.
+        // This replaces per-execution tokio::spawn for timeouts.
+        let ticker_engine = engine.clone();
+        let epoch_ticker = std::thread::Builder::new()
+            .name("sandcastle-epoch-ticker".into())
+            .spawn(move || loop {
+                std::thread::sleep(EPOCH_TICK_INTERVAL);
+                ticker_engine.increment_epoch();
+            })
+            .map_err(|e| SandcastleError::RuntimeInit(format!("epoch ticker thread: {e}")))?;
+
         // Drop config (and its guest_module bytes) by not storing it
         Ok(Self {
             engine,
@@ -91,6 +109,7 @@ impl SandCastle {
             security_mode,
             concurrency_semaphore,
             metrics: Arc::new(PoolMetrics::new()),
+            _epoch_ticker: epoch_ticker,
         })
     }
 
