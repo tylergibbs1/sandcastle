@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
-use wasmtime::{Config as WasmConfig, Engine, Linker, Module};
+use wasmtime::{Config as WasmConfig, Engine, InstancePre, Linker, Module};
 
 use crate::capability::CapabilityRegistry;
 use crate::error::{Result, SandcastleError};
@@ -55,6 +55,8 @@ pub struct SandCastle {
     engine: Engine,
     module: Module,
     linker: Arc<Linker<SandboxState>>,
+    /// Pre-linked instance for fast instantiation (skips type-checking and import resolution).
+    instance_pre: Arc<InstancePre<SandboxState>>,
     #[expect(dead_code, reason = "will be used when Hardened mode is implemented")]
     security_mode: SecurityMode,
     concurrency_semaphore: Arc<Semaphore>,
@@ -91,6 +93,14 @@ impl SandCastle {
 
         let linker = Arc::new(Sandbox::build_linker(&engine)?);
 
+        // Pre-link the module: performs all type-checking and import resolution once.
+        // instantiate_pre() only needs to set up memory/tables per execution.
+        let instance_pre = Arc::new(
+            linker
+                .instantiate_pre(&module)
+                .map_err(|e| SandcastleError::RuntimeInit(format!("pre-instantiation failed: {e}")))?,
+        );
+
         let concurrency_semaphore = Arc::new(Semaphore::new(config.max_concurrent_sandboxes));
         let security_mode = config.security_mode;
 
@@ -116,6 +126,7 @@ impl SandCastle {
             engine,
             module,
             linker,
+            instance_pre,
             security_mode,
             concurrency_semaphore,
             metrics: Arc::new(PoolMetrics::new()),
@@ -140,7 +151,7 @@ impl SandCastle {
         debug!(code_len = request.code.len(), "Creating sandbox for execution");
         let _guard = self.metrics.execution_started();
 
-        let sandbox = Sandbox::new(&self.engine, &self.module, self.linker.clone())?;
+        let sandbox = Sandbox::new_with_pre(&self.engine, &self.module, self.linker.clone(), self.instance_pre.clone())?;
 
         sandbox.execute(request).await
     }
