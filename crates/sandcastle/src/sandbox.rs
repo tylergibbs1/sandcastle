@@ -86,12 +86,16 @@ pub struct ExecutionRequest {
     pub env: std::collections::HashMap<String, String>,
 }
 
+/// Shared empty capability registry to avoid per-request Arc+HashMap allocation.
+static EMPTY_REGISTRY: std::sync::LazyLock<Arc<CapabilityRegistry>> =
+    std::sync::LazyLock::new(|| Arc::new(CapabilityRegistry::new()));
+
 impl ExecutionRequest {
     pub fn new(code: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             input: serde_json::Value::Null,
-            capabilities: Arc::new(CapabilityRegistry::new()),
+            capabilities: EMPTY_REGISTRY.clone(),
             limits: Limits::default(),
             input_artifacts: vec![],
             on_console: None,
