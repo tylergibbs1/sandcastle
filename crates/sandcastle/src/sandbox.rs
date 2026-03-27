@@ -331,8 +331,14 @@ impl Sandbox {
             })?;
 
         let code_bytes = request.code.as_bytes();
-        let input_bytes = serde_json::to_vec(&store.data().input_json)
-            .map_err(|e| SandcastleError::Serialization(e.to_string()))?;
+        // Fast path: avoid serde for null input (common case for simple executions)
+        static NULL_JSON: &[u8] = b"null";
+        let input_bytes = if store.data().input_json.is_null() {
+            NULL_JSON.to_vec()
+        } else {
+            serde_json::to_vec(&store.data().input_json)
+                .map_err(|e| SandcastleError::Serialization(e.to_string()))?
+        };
 
         // Allocate and write code
         let code_ptr = alloc
