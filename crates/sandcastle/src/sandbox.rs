@@ -176,6 +176,8 @@ pub(crate) struct SandboxState {
     pub(crate) output_artifacts: Vec<OutputArtifact>,
     pub(crate) input_artifacts: Vec<Artifact>,
     pub(crate) input_json: serde_json::Value,
+    /// Pre-serialized input bytes for __sandcastle_get_input (avoids re-serializing per call).
+    pub(crate) input_json_bytes: Vec<u8>,
     pub(crate) start_time: Instant,
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) recorder: TranscriptRecorder,
@@ -287,6 +289,7 @@ impl Sandbox {
                 }
                 input
             },
+            input_json_bytes: Vec::new(), // filled after store creation
             start_time: Instant::now(),
             cancelled: Arc::new(AtomicBool::new(false)),
             recorder,
@@ -340,13 +343,14 @@ impl Sandbox {
 
         let code_bytes = request.code.as_bytes();
         // Fast path: avoid serde for null input (common case for simple executions)
-        static NULL_JSON: &[u8] = b"null";
         let input_bytes = if store.data().input_json.is_null() {
-            NULL_JSON.to_vec()
+            b"null".to_vec()
         } else {
             serde_json::to_vec(&store.data().input_json)
                 .map_err(|e| SandcastleError::Serialization(e.to_string()))?
         };
+        // Cache serialized bytes for __sandcastle_get_input host function
+        store.data_mut().input_json_bytes = input_bytes.clone();
 
         // Allocate and write code
         let code_ptr = alloc
@@ -603,19 +607,21 @@ impl Sandbox {
                 "sandcastle",
                 "__sandcastle_get_input",
                 |mut caller: Caller<'_, SandboxState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                    let input = serde_json::to_vec(&caller.data().input_json).unwrap_or_default();
+                    // Use pre-serialized bytes to avoid re-serializing per call.
+                    // Clone the bytes to release the borrow on caller before writing.
+                    let input_bytes = caller.data().input_json_bytes.clone();
                     let memory = get_memory!(caller);
                     let safe_len = validated_len(buf_len);
-                    let copy_len = input.len().min(safe_len);
+                    let copy_len = input_bytes.len().min(safe_len);
                     if copy_len > 0 {
                         if memory
-                            .write(&mut caller, buf_ptr as usize, &input[..copy_len])
+                            .write(&mut caller, buf_ptr as usize, &input_bytes[..copy_len])
                             .is_err()
                         {
                             return -1;
                         }
                     }
-                    input.len() as i32
+                    input_bytes.len() as i32
                 },
             )
             .map_err(|e| SandcastleError::RuntimeInit(e.to_string()))?;
@@ -898,6 +904,7 @@ impl PersistentSandbox {
             output_artifacts: Vec::new(),
             input_artifacts: vec![],
             input_json: serde_json::Value::Null,
+            input_json_bytes: b"null".to_vec(),
             start_time: Instant::now(),
             cancelled: Arc::new(AtomicBool::new(false)),
             recorder,
@@ -989,6 +996,7 @@ impl PersistentSandbox {
         self.store.data_mut().output_artifacts.clear();
         self.store.data_mut().console_messages.clear();
         self.store.data_mut().input_json = input.clone();
+        self.store.data_mut().input_json_bytes = serde_json::to_vec(&input).unwrap_or_default();
         self.store.data_mut().start_time = Instant::now();
         self.store.data_mut().cancelled.store(false, Ordering::SeqCst);
 
