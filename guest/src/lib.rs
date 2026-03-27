@@ -19,6 +19,30 @@
 
 use std::alloc::{alloc as std_alloc, dealloc as std_dealloc, Layout};
 use std::slice;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// ---------------------------------------------------------------------------
+// Wizer pre-initialization support
+// ---------------------------------------------------------------------------
+// When the WASM module is processed by wizer, `wizer_initialize()` is called
+// at build time. It creates a QuickJS Runtime+Context and evaluates the
+// console setup + polyfills once. The initialized state is baked into the
+// module's linear memory so every subsequent `evaluate()` call can skip that
+// work (~1-2 ms saving per invocation).
+//
+// We use raw pointers to heap-allocated (Box::leak'd) Runtime/Context so
+// they live for the entire program lifetime. An AtomicBool flag indicates
+// whether initialization has been performed.
+// ---------------------------------------------------------------------------
+
+/// Flag: true once wizer_initialize has run.
+static PREINIT_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Raw pointer to a leaked rquickjs::Runtime.
+static mut PREINIT_RUNTIME_PTR: *mut rquickjs::Runtime = std::ptr::null_mut();
+
+/// Raw pointer to a leaked rquickjs::Context.
+static mut PREINIT_CONTEXT_PTR: *mut rquickjs::Context = std::ptr::null_mut();
 
 // Host imports from the "sandcastle" WASM module
 #[link(wasm_import_module = "sandcastle")]
@@ -263,60 +287,51 @@ pub extern "C" fn evaluate(
     }
 }
 
-/// Execute JavaScript code using QuickJS via rquickjs.
-fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let rt = rquickjs::Runtime::new().map_err(|e| format!("Failed to create runtime: {e}"))?;
+// ---------------------------------------------------------------------------
+// Console setup JS — creates globalThis.console with pretty-printing.
+// NOTE: The console object calls `globalThis.__sandcastle_console_log` which
+// must be injected as a Rust callback before console.log will actually reach
+// the host. During wizer init this function doesn't exist yet, so the console
+// object is set up structurally but calls would no-op/error. That's fine
+// because no user code runs during init.
+// ---------------------------------------------------------------------------
+const CONSOLE_SETUP_JS: &str = r#"
+    globalThis.console = (function() {
+        function fmt(v, depth) {
+            if (depth === undefined) depth = 2;
+            if (v === null) return 'null';
+            if (v === undefined) return 'undefined';
+            if (typeof v === 'string') return v;
+            if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+            if (typeof v === 'symbol') return v.toString();
+            if (typeof v === 'function') return '[Function: ' + (v.name || 'anonymous') + ']';
+            if (v instanceof Error) return v.stack || (v.name + ': ' + v.message);
+            if (depth <= 0) return Array.isArray(v) ? '[Array]' : '[Object]';
+            try {
+                if (Array.isArray(v)) return '[ ' + v.map(x => fmt(x, depth - 1)).join(', ') + ' ]';
+                const keys = Object.keys(v);
+                if (keys.length === 0) return '{}';
+                return '{ ' + keys.map(k => k + ': ' + fmt(v[k], depth - 1)).join(', ') + ' }';
+            } catch(e) { return String(v); }
+        }
+        function log(level, args) {
+            if (typeof globalThis.__sandcastle_console_log === 'function') {
+                globalThis.__sandcastle_console_log(level, args.map(a => fmt(a)).join(' '));
+            }
+        }
+        return {
+            log: function(...args) { log(0, args); },
+            warn: function(...args) { log(1, args); },
+            error: function(...args) { log(2, args); },
+            debug: function(...args) { log(3, args); }
+        };
+    })();
+"#;
 
-    // Lower the GC threshold to reduce fragmentation under memory pressure.
-    // This triggers more frequent garbage collection, helping prevent
-    // memory fragmentation that could lead to premature OOM.
-    rt.set_gc_threshold(256 * 1024);
-
-    let ctx = rquickjs::Context::full(&rt).map_err(|e| format!("Failed to create context: {e}"))?;
-
-    ctx.with(|ctx| {
-        // Inject `__sandcastle_input` global
-        let input_json = serde_json::to_string(input).unwrap_or_else(|_| "null".to_string());
-
-        // Set up console object with pretty-printing for objects
-        let setup = r#"
-            globalThis.console = (function() {
-                function fmt(v, depth) {
-                    if (depth === undefined) depth = 2;
-                    if (v === null) return 'null';
-                    if (v === undefined) return 'undefined';
-                    if (typeof v === 'string') return v;
-                    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-                    if (typeof v === 'symbol') return v.toString();
-                    if (typeof v === 'function') return '[Function: ' + (v.name || 'anonymous') + ']';
-                    if (v instanceof Error) return v.stack || (v.name + ': ' + v.message);
-                    if (depth <= 0) return Array.isArray(v) ? '[Array]' : '[Object]';
-                    try {
-                        if (Array.isArray(v)) return '[ ' + v.map(x => fmt(x, depth - 1)).join(', ') + ' ]';
-                        const keys = Object.keys(v);
-                        if (keys.length === 0) return '{}';
-                        return '{ ' + keys.map(k => k + ': ' + fmt(v[k], depth - 1)).join(', ') + ' }';
-                    } catch(e) { return String(v); }
-                }
-                function log(level, args) {
-                    globalThis.__sandcastle_console_log(level, args.map(a => fmt(a)).join(' '));
-                }
-                return {
-                    log: function(...args) { log(0, args); },
-                    warn: function(...args) { log(1, args); },
-                    error: function(...args) { log(2, args); },
-                    debug: function(...args) { log(3, args); }
-                };
-            })();
-        "#;
-
-        ctx.eval::<(), _>(setup)
-            .map_err(|e| format!("Failed to set up console: {e}"))?;
-
-        // Polyfill Web APIs that QuickJS doesn't provide natively.
-        // These are declared in sdk/typescript/src/guest/index.d.ts and
-        // expected by user code.
-        let polyfills = r#"
+// ---------------------------------------------------------------------------
+// Polyfills JS — pure JS, no host calls, safe to run during wizer init.
+// ---------------------------------------------------------------------------
+const POLYFILLS_JS: &str = r#"
             // --- atob / btoa (Base64) ---
             if (typeof globalThis.btoa === 'undefined') {
                 const _b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
@@ -647,213 +662,297 @@ fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, St
                     exit() { throw new Error("process.exit() is not available in sandbox"); }
                 };
             }
-        "#;
+"#;
 
-        ctx.eval::<(), _>(polyfills)
-            .map_err(|e| format!("Failed to set up polyfills: {e}"))?;
+/// Static bridge code that can be pre-initialized via wizer.
+/// Sets up fetch(), fs module, register_module, and modules registry.
+/// These reference __sandcastle_host_call etc. via late binding — the actual
+/// Rust-backed functions are injected per-execution before user code runs.
+const STATIC_BRIDGE_JS: &str = r#"
+    // Create the host:api import bridge
+    globalThis.__sandcastle_modules = {};
 
-        // Inject the console_log callback
-        let console_fn = rquickjs::Function::new(ctx.clone(), |level: i32, msg: String| {
-            console_log(level, &msg);
-        })
-        .map_err(|e| format!("Failed to create console function: {e}"))?;
-
-        let globals = ctx.globals();
-        globals
-            .set("__sandcastle_console_log", console_fn)
-            .map_err(|e| format!("Failed to set console function: {e}"))?;
-
-        // Inject host_call function for capabilities
-        // On error, this throws a JS exception so the guest can't silently ignore quota errors
-        let host_call_fn =
-            rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'_>, cap: String, method: String, payload: String| -> rquickjs::Result<String> {
-                let payload_bytes = payload.as_bytes();
-                match call_host_capability(&cap, &method, payload_bytes) {
-                    Ok(result) => Ok(String::from_utf8_lossy(&result).into_owned()),
-                    Err(e) => Err(ctx.throw(rquickjs::Value::from_string(
-                        rquickjs::String::from_str(ctx.clone(), &e)
-                            .map_err(|_| rquickjs::Error::Unknown)?
-                    ).into())),
+    globalThis.__sandcastle_register_module = function(name, methods) {
+        globalThis.__sandcastle_modules[name] = {};
+        for (const method of methods) {
+            globalThis.__sandcastle_modules[name][method] = function(...args) {
+                const payload = JSON.stringify(args);
+                const result = __sandcastle_host_call(name, method, payload);
+                try {
+                    return JSON.parse(result);
+                } catch(e) {
+                    return result;
                 }
-            })
-            .map_err(|e| format!("Failed to create host_call function: {e}"))?;
+            };
+        }
+    };
 
+    // Virtual fs module
+    globalThis.__sandcastle_fs = {
+        readFile: function(path, encoding) {
+            const name = path.startsWith('/') ? path.slice(1) : path;
+            const data = __sandcastle_read_artifact(name);
+            if (data === null || data === undefined) {
+                throw new Error("File not found: " + path);
+            }
+            return data;
+        },
+        writeFile: function(path, data) {
+            const name = path.startsWith('/output/') ? path.slice(8) : path.startsWith('/') ? path.slice(1) : path;
+            return __sandcastle_write_artifact(name, typeof data === 'string' ? data : JSON.stringify(data));
+        }
+    };
+
+    // --- fetch() polyfill (delegates to HTTP capability) ---
+    globalThis.fetch = function(url, options) {
+        options = options || {};
+        const method = (options.method || 'GET').toUpperCase();
+        const headers = options.headers || {};
+        const body = options.body || undefined;
+
+        const payload = { method, url: String(url), headers };
+        if (body !== undefined) payload.body = String(body);
+
+        let resp;
+        try {
+            resp = JSON.parse(__sandcastle_host_call("http", "request", JSON.stringify(payload)));
+        } catch(e) {
+            return Promise.reject(new TypeError("fetch failed: " + e));
+        }
+
+        const responseBody = resp.body || '';
+        const responseHeaders = resp.headers || {};
+        const status = resp.status || 0;
+
+        return Promise.resolve({
+            ok: status >= 200 && status < 300,
+            status: status,
+            statusText: status === 200 ? 'OK' : String(status),
+            headers: {
+                get(name) { return responseHeaders[name.toLowerCase()] || null; },
+                has(name) { return name.toLowerCase() in responseHeaders; }
+            },
+            url: String(url),
+            text() { return Promise.resolve(responseBody); },
+            json() { return Promise.resolve(JSON.parse(responseBody)); },
+            blob() { return Promise.resolve(new Blob([responseBody])); },
+            clone() { return this; }
+        });
+    };
+"#;
+
+// ---------------------------------------------------------------------------
+// Wizer entry point — called once at build time by `wizer` to pre-initialize
+// the QuickJS Runtime+Context with console setup and polyfills baked in.
+// ---------------------------------------------------------------------------
+#[unsafe(no_mangle)]
+pub extern "C" fn wizer_initialize() {
+    let rt = rquickjs::Runtime::new().expect("wizer: failed to create runtime");
+    rt.set_gc_threshold(256 * 1024);
+    let ctx = rquickjs::Context::full(&rt).expect("wizer: failed to create context");
+
+    // Evaluate the console structure and polyfills. These are pure JS with no
+    // host import calls, so they are safe to run during wizer init.
+    ctx.with(|ctx| {
+        ctx.eval::<(), _>(CONSOLE_SETUP_JS)
+            .expect("wizer: failed to eval console setup");
+        ctx.eval::<(), _>(POLYFILLS_JS)
+            .expect("wizer: failed to eval polyfills");
+        ctx.eval::<(), _>(STATIC_BRIDGE_JS)
+            .expect("wizer: failed to eval static bridge");
+    });
+
+    // Leak into statics so they survive for the lifetime of the module.
+    // SAFETY: WASM is single-threaded; these are written exactly once during
+    // wizer init and only read thereafter.
+    unsafe {
+        PREINIT_RUNTIME_PTR = Box::into_raw(Box::new(rt));
+        PREINIT_CONTEXT_PTR = Box::into_raw(Box::new(ctx));
+    }
+    PREINIT_DONE.store(true, Ordering::Release);
+}
+
+/// Inject all Rust-backed host functions and the input/bridge JS into a
+/// QuickJS context. This is called on every `evaluate()` regardless of
+/// whether the context was pre-initialized or freshly created.
+fn inject_host_bindings_and_input(
+    ctx: &rquickjs::Ctx<'_>,
+    input: &serde_json::Value,
+) -> Result<(), String> {
+    let globals = ctx.globals();
+
+    // Inject Rust-backed host functions into the JS global scope.
+    // These bridge JS calls to WASM host imports.
+    let console_fn = rquickjs::Function::new(ctx.clone(), |level: i32, msg: String| {
+        console_log(level, &msg);
+    })
+    .map_err(|e| format!("Failed to create console function: {e}"))?;
+    globals
+        .set("__sandcastle_console_log", console_fn)
+        .map_err(|e| format!("Failed to set console function: {e}"))?;
+
+    let host_call_fn =
+        rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'_>, cap: String, method: String, payload: String| -> rquickjs::Result<String> {
+            let payload_bytes = payload.as_bytes();
+            match call_host_capability(&cap, &method, payload_bytes) {
+                Ok(result) => Ok(String::from_utf8_lossy(&result).into_owned()),
+                Err(e) => Err(ctx.throw(rquickjs::Value::from_string(
+                    rquickjs::String::from_str(ctx.clone(), &e)
+                        .map_err(|_| rquickjs::Error::Unknown)?
+                ).into())),
+            }
+        })
+        .map_err(|e| format!("Failed to create host_call function: {e}"))?;
+    globals
+        .set("__sandcastle_host_call", host_call_fn)
+        .map_err(|e| format!("Failed to set host_call function: {e}"))?;
+
+    let read_artifact_fn =
+        rquickjs::Function::new(ctx.clone(), |name: String| -> rquickjs::Result<Option<String>> {
+            Ok(read_artifact(&name).map(|data| String::from_utf8_lossy(&data).into_owned()))
+        })
+        .map_err(|e| format!("Failed to create read_artifact function: {e}"))?;
+    let write_artifact_fn =
+        rquickjs::Function::new(ctx.clone(), |name: String, data: String| -> bool {
+            write_artifact(&name, data.as_bytes())
+        })
+        .map_err(|e| format!("Failed to create write_artifact function: {e}"))?;
+    globals
+        .set("__sandcastle_read_artifact", read_artifact_fn)
+        .map_err(|e| format!("Failed to set read_artifact function: {e}"))?;
+    globals
+        .set("__sandcastle_write_artifact", write_artifact_fn)
+        .map_err(|e| format!("Failed to set write_artifact function: {e}"))?;
+
+    // Inject input. Fast path for null input avoids serde + JS eval overhead.
+    if input.is_null() {
         globals
-            .set("__sandcastle_host_call", host_call_fn)
-            .map_err(|e| format!("Failed to set host_call function: {e}"))?;
-
-        // Inject fs functions for artifacts
-        let read_artifact_fn =
-            rquickjs::Function::new(ctx.clone(), |name: String| -> rquickjs::Result<Option<String>> {
-                Ok(read_artifact(&name).map(|data| String::from_utf8_lossy(&data).into_owned()))
-            })
-            .map_err(|e| format!("Failed to create read_artifact function: {e}"))?;
-
-        let write_artifact_fn =
-            rquickjs::Function::new(ctx.clone(), |name: String, data: String| -> bool {
-                write_artifact(&name, data.as_bytes())
-            })
-            .map_err(|e| format!("Failed to create write_artifact function: {e}"))?;
-
+            .set("__sandcastle_input", rquickjs::Value::new_null(ctx.clone()))
+            .map_err(|e| format!("Failed to set input: {e}"))?;
         globals
-            .set("__sandcastle_read_artifact", read_artifact_fn)
-            .map_err(|e| format!("Failed to set read_artifact function: {e}"))?;
-        globals
-            .set("__sandcastle_write_artifact", write_artifact_fn)
-            .map_err(|e| format!("Failed to set write_artifact function: {e}"))?;
-
-        // Inject input and host API bridge
+            .set("input", rquickjs::Value::new_null(ctx.clone()))
+            .map_err(|e| format!("Failed to set input: {e}"))?;
+    } else {
+        let input_json = serde_json::to_string(input).unwrap_or_else(|_| "null".to_string());
         let bridge_code = format!(
             r#"
             globalThis.__sandcastle_input = {input_json};
-
-            // Extract injected env vars into process.env, then clean up
             if (globalThis.__sandcastle_input && globalThis.__sandcastle_input.__sandcastle_env) {{
                 Object.assign(globalThis.process.env, globalThis.__sandcastle_input.__sandcastle_env);
                 delete globalThis.__sandcastle_input.__sandcastle_env;
-                // If input was wrapped due to non-object original, unwrap it
                 if ('__sandcastle_original_input' in globalThis.__sandcastle_input) {{
                     globalThis.__sandcastle_input = globalThis.__sandcastle_input.__sandcastle_original_input;
                 }}
             }}
-
-            // Shorthand: `input` is available directly in user code
             globalThis.input = globalThis.__sandcastle_input;
-
-            // Create the host:api import bridge
-            globalThis.__sandcastle_modules = {{}};
-
-            globalThis.__sandcastle_register_module = function(name, methods) {{
-                globalThis.__sandcastle_modules[name] = {{}};
-                for (const method of methods) {{
-                    globalThis.__sandcastle_modules[name][method] = function(...args) {{
-                        const payload = JSON.stringify(args);
-                        const result = __sandcastle_host_call(name, method, payload);
-                        try {{
-                            return JSON.parse(result);
-                        }} catch(e) {{
-                            return result;
-                        }}
-                    }};
-                }}
-            }};
-
-            // Virtual fs module
-            globalThis.__sandcastle_fs = {{
-                readFile: function(path, encoding) {{
-                    const name = path.startsWith('/') ? path.slice(1) : path;
-                    const data = __sandcastle_read_artifact(name);
-                    if (data === null || data === undefined) {{
-                        throw new Error("File not found: " + path);
-                    }}
-                    return data;
-                }},
-                writeFile: function(path, data) {{
-                    const name = path.startsWith('/output/') ? path.slice(8) : path.startsWith('/') ? path.slice(1) : path;
-                    return __sandcastle_write_artifact(name, typeof data === 'string' ? data : JSON.stringify(data));
-                }}
-            }};
-
-            // --- fetch() polyfill (delegates to HTTP capability) ---
-            globalThis.fetch = function(url, options) {{
-                options = options || {{}};
-                const method = (options.method || 'GET').toUpperCase();
-                const headers = options.headers || {{}};
-                const body = options.body || undefined;
-
-                const payload = {{ method, url: String(url), headers }};
-                if (body !== undefined) payload.body = String(body);
-
-                let resp;
-                try {{
-                    resp = JSON.parse(__sandcastle_host_call("http", "request", JSON.stringify(payload)));
-                }} catch(e) {{
-                    return Promise.reject(new TypeError("fetch failed: " + e));
-                }}
-
-                const responseBody = resp.body || '';
-                const responseHeaders = resp.headers || {{}};
-                const status = resp.status || 0;
-
-                return Promise.resolve({{
-                    ok: status >= 200 && status < 300,
-                    status: status,
-                    statusText: status === 200 ? 'OK' : String(status),
-                    headers: {{
-                        get(name) {{ return responseHeaders[name.toLowerCase()] || null; }},
-                        has(name) {{ return name.toLowerCase() in responseHeaders; }}
-                    }},
-                    url: String(url),
-                    text() {{ return Promise.resolve(responseBody); }},
-                    json() {{ return Promise.resolve(JSON.parse(responseBody)); }},
-                    blob() {{ return Promise.resolve(new Blob([responseBody])); }},
-                    clone() {{ return this; }}
-                }});
-            }};
             "#
         );
-
         ctx.eval::<(), _>(bridge_code.as_str())
             .map_err(|e| format!("Failed to set up bridge: {e}"))?;
+    }
 
-        // Wrap user code in an async IIFE so that:
-        // 1. Top-level `return` works
-        // 2. The microtask queue is flushed before the result is captured
-        // 3. If the user returns a Promise, we await it
-        let wrapped_code = format!(
-            r#"
-            (function() {{
-                // Simple import resolution for host:api and host:fs
-                const host_api = globalThis.__sandcastle_modules["host:api"] || {{}};
-                const host_fs = globalThis.__sandcastle_fs;
+    // For non-wizer path, also evaluate the static bridge code
+    let is_preinit = PREINIT_DONE.load(Ordering::Acquire);
+    if !is_preinit {
+        ctx.eval::<(), _>(STATIC_BRIDGE_JS)
+            .map_err(|e| format!("Failed to set up static bridge: {e}"))?;
+    }
 
-                // Make input available
-                const input = globalThis.__sandcastle_input;
+    Ok(())
+}
 
-                // User code result
-                let __result;
-                try {{
-                    __result = (function() {{
-                        {code}
-                    }})();
-                }} catch(e) {{
-                    throw e;
-                }}
-                return __result;
-            }})()
-            "#
-        );
+/// Execute user JS code within a QuickJS context, returning the result.
+fn execute_user_code<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    code: &str,
+) -> Result<serde_json::Value, String> {
+    let wrapped_code = format!(
+        r#"
+        (function() {{
+            // Simple import resolution for host:api and host:fs
+            const host_api = globalThis.__sandcastle_modules["host:api"] || {{}};
+            const host_fs = globalThis.__sandcastle_fs;
 
-        let result: rquickjs::Value = ctx
-            .eval(wrapped_code.as_str())
-            .map_err(|e| {
-                // Try to extract a useful error message from the JS exception
-                // instead of the generic "Exception generated by QuickJS"
-                let catch_result: Result<rquickjs::Value, _> = ctx.eval(
-                    "(function() { try { return null; } catch(e) { return e && e.stack ? e.stack : e && e.message ? e.name + ': ' + e.message : String(e); } })()"
-                );
-                if let Ok(val) = &catch_result {
-                    if let Some(s) = val.as_string() {
-                        if let Ok(msg) = s.to_string() {
-                            if msg != "null" && !msg.is_empty() {
-                                return format!("JavaScript error: {msg}");
-                            }
+            // Make input available
+            const input = globalThis.__sandcastle_input;
+
+            // User code result
+            let __result;
+            try {{
+                __result = (function() {{
+                    {code}
+                }})();
+            }} catch(e) {{
+                throw e;
+            }}
+            return __result;
+        }})()
+        "#
+    );
+
+    let result: rquickjs::Value = ctx
+        .eval(wrapped_code.as_str())
+        .map_err(|e| {
+            // Try to extract a useful error message from the JS exception
+            let catch_result: Result<rquickjs::Value, _> = ctx.eval(
+                "(function() { try { return null; } catch(e) { return e && e.stack ? e.stack : e && e.message ? e.name + ': ' + e.message : String(e); } })()"
+            );
+            if let Ok(val) = &catch_result {
+                if let Some(s) = val.as_string() {
+                    if let Ok(msg) = s.to_string() {
+                        if msg != "null" && !msg.is_empty() {
+                            return format!("JavaScript error: {msg}");
                         }
                     }
                 }
-                format!("JavaScript error: {e}")
-            })?;
+            }
+            format!("JavaScript error: {e}")
+        })?;
 
-        // Flush the microtask/Promise job queue so that Promise.resolve().then(...)
-        // and async/await patterns complete before we capture the return value.
-        while ctx.execute_pending_job() {}
+    // Flush the microtask/Promise job queue
+    while ctx.execute_pending_job() {}
 
-        // If the result is a Promise, try to extract its resolved value
-        let result = resolve_promise_if_needed(&ctx, &result)?;
+    // If the result is a Promise, try to extract its resolved value
+    let result = resolve_promise_if_needed(ctx, &result)?;
 
-        // Convert rquickjs Value to serde_json Value
-        value_to_json(&ctx, &result)
-    })
+    // Convert rquickjs Value to serde_json Value
+    value_to_json(ctx, &result)
+}
+
+/// Execute JavaScript code using QuickJS via rquickjs.
+///
+/// If wizer pre-initialization was performed, reuses the existing Runtime and
+/// Context (skipping ~1-2ms of polyfill setup). Otherwise falls back to
+/// creating a fresh Runtime+Context with full setup.
+fn run_js(code: &str, input: &serde_json::Value) -> Result<serde_json::Value, String> {
+    // Check if we have a pre-initialized context from wizer
+    if PREINIT_DONE.load(Ordering::Acquire) {
+        // Wizer path: reuse pre-initialized Runtime+Context.
+        // Console setup + polyfills are already evaluated.
+        // SAFETY: PREINIT_DONE guarantees the pointer was written; WASM is
+        // single-threaded so no concurrent mutation.
+        let ctx = unsafe { &*PREINIT_CONTEXT_PTR };
+        ctx.with(|ctx| {
+            inject_host_bindings_and_input(&ctx, input)?;
+            execute_user_code(&ctx, code)
+        })
+    } else {
+        // Fallback path: create fresh Runtime+Context with full setup.
+        let rt = rquickjs::Runtime::new()
+            .map_err(|e| format!("Failed to create runtime: {e}"))?;
+        rt.set_gc_threshold(256 * 1024);
+        let ctx = rquickjs::Context::full(&rt)
+            .map_err(|e| format!("Failed to create context: {e}"))?;
+
+        ctx.with(|ctx| {
+            ctx.eval::<(), _>(CONSOLE_SETUP_JS)
+                .map_err(|e| format!("Failed to set up console: {e}"))?;
+            ctx.eval::<(), _>(POLYFILLS_JS)
+                .map_err(|e| format!("Failed to set up polyfills: {e}"))?;
+            inject_host_bindings_and_input(&ctx, input)?;
+            execute_user_code(&ctx, code)
+        })
+    }
 }
 
 /// If the value is a Promise, drain the job queue and extract the resolved value.

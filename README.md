@@ -6,7 +6,7 @@
 
 <p align="center">Lightweight WASM-based sandbox runtime for AI agent code execution.</p>
 
-SandCastle lets you execute JavaScript in secure, isolated sandboxes with sub-millisecond cold starts and ~1.3MB peak memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS-NG (ES2024+) as the JavaScript engine.
+SandCastle lets you execute JavaScript in secure, isolated sandboxes with **~67µs cold starts** and ~1.3MB peak memory per sandbox. It uses WebAssembly (Wasmtime) as the isolation layer and QuickJS-NG (ES2024+) as the JavaScript engine, with build-time pre-initialization via [wizer](https://github.com/nickelpack/nickel-runtime/tree/main/crates/wizer) to eliminate per-execution JS engine startup overhead.
 
 For most developers, the best entry point is the TypeScript SDK.
 
@@ -51,16 +51,15 @@ SandCastle is optimized for agent-style code execution: short-lived JavaScript r
 
 ```
                         Apple Silicon (M4)     AWS c7g.xlarge (Graviton3)
-Sandbox creation:       600µs (1,700 ops/sec)  4.4ms (228 ops/sec)
-Simple expression:      600µs                  4.4ms
-JSON processing:        1.5ms (100 items)      5.8ms
-1000 concurrent:        105ms (105µs/sandbox)  1.2s (1.2ms/sandbox)
-1MB input:              13ms                   37ms
+Sandbox creation:       67µs (15,000 ops/sec)  191µs (5,200 ops/sec)
+Simple expression:      67µs (15,000 ops/sec)  195µs (5,100 ops/sec)
+JSON processing:        850µs (100 items)      1.7ms
+500 concurrent:         18ms (35µs/sandbox)    54ms (108µs/sandbox)
 Peak memory:            ~1.3MB per sandbox     ~1.3MB per sandbox
-Guest WASM module:      ~868KB                 ~868KB
+Guest WASM module:      ~1.1MB (pre-initialized)
 ```
 
-Still **100x faster than Docker** (~500ms) and **25x faster than E2B** (~100ms) even on the slowest platform.
+**7,500x faster than Docker** (~500ms) and **1,500x faster than E2B** (~100ms).
 
 AI agents need to run code. The usual options are containers (slow), V8 isolates (heavier), or `eval` (unsafe). SandCastle is a different tradeoff: WASM-based sandboxes that are fast, lightweight, and capability-driven.
 
@@ -70,25 +69,25 @@ AI agents need to run code. The usual options are containers (slow), V8 isolates
 | E2B | ~100-200ms | ~512MB min | Hosted / KVM | Full Node.js | Firecracker |
 | V8 isolate (self-hosted) | ~3-5ms | ~5MB | ~50MB (V8 lib) | Full ES2024+ | V8 isolate boundary |
 | Cloudflare Workers | ~3ms | ~5MB | Cloudflare only | Full ES2024+ | V8 isolates |
-| **SandCastle** | **<1ms local, ~4ms cloud** | **~1.3MB** | **~868KB WASM** | **ES2024+ (QuickJS-NG)** | **WASM spec boundary** |
+| **SandCastle** | **~67µs local** | **~1.3MB** | **~1.1MB WASM** | **ES2024+ (QuickJS-NG)** | **WASM spec boundary** |
 
 ### Containers vs SandCastle
 
-Containers boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms startup and 100MB+ memory — fine for long-running services, but AI agents make 10-50 tool calls per conversation. At 500ms per sandbox, that's 5-25 seconds of waiting. At 600µs, it's 6-30ms.
+Containers boot an entire OS kernel to run `return 1 + 1`. That's 100-500ms startup and 100MB+ memory — fine for long-running services, but AI agents make 10-50 tool calls per conversation. At 500ms per sandbox, that's 5-25 seconds of waiting. At 67µs, it's 0.7-3.4ms.
 
 ### V8 isolates vs SandCastle
 
 V8 isolates are the closest alternative — they're in-process and don't need containers. The tradeoffs:
 
 - **V8 wins on JIT performance** — faster for compute-heavy loops due to JIT compilation
-- **SandCastle wins on startup** (0.6ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (868KB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
+- **SandCastle wins on startup** (0.067ms vs 3-5ms), **memory** (1.3MB vs 5MB), **binary size** (1.1MB vs ~50MB for the V8 library), and **embedding simplicity** (Wasmtime's API is small and clean; V8's is notoriously complex)
 - **JS compatibility is now comparable** — SandCastle uses QuickJS-NG which supports ES2024+ including `Object.groupBy`, `Promise.withResolvers`, `Array.fromAsync`, `Set` methods, iterator helpers, and more
 
 If you need Node.js APIs or heavy compute (JIT matters), use V8. If you need fast, lightweight sandboxes for AI agent code — data transforms, API orchestration, JSON processing — SandCastle is purpose-built for that.
 
 ### How the sandbox works
 
-QuickJS (a C JavaScript engine) compiles to WASM and runs *inside* the sandbox. Guest code has zero access to the host — no filesystem, no network, no syscalls. Everything goes through explicit host function imports that you control and meter. The sandbox boundary is the WASM spec itself.
+QuickJS (a C JavaScript engine) compiles to WASM and runs *inside* the sandbox. At build time, [wizer](https://github.com/nickelpack/nickel-runtime/tree/main/crates/wizer) pre-initializes the QuickJS runtime, context, and all polyfills, snapshotting the result into the WASM module's data segment. Each execution instantiates a fresh copy-on-write clone of this pre-initialized state — no JS engine startup, no polyfill evaluation. Guest code has zero access to the host — no filesystem, no network, no syscalls. Everything goes through explicit host function imports that you control and meter. The sandbox boundary is the WASM spec itself.
 
 ### Research context
 
@@ -98,6 +97,15 @@ This approach is validated by recent academic work:
 - **[CodeAgents](https://arxiv.org/html/2507.03254v1)** (Jul 2025) validates codified multi-agent reasoning — replacing N tool calls with a single code execution — the same pattern as our `createCodeTool()` / `TwoPassExecutor`.
 - **[Fault-Tolerant Sandboxing](https://arxiv.org/abs/2512.12806)** (Dec 2025) uses filesystem snapshots for safety (14.5% overhead). SandCastle achieves stronger isolation at 800x lower cost because WASM provides memory isolation without snapshotting.
 - **[Systems Security for Agentic Computing](https://arxiv.org/html/2512.01295v1)** (Dec 2025) argues for capability-based, least-privilege agent security — which is exactly SandCastle's architecture (typed capability bridge, per-capability quotas, domain allowlists).
+
+### Performance optimization research
+
+SandCastle's performance is the result of systematic research informed by academic literature:
+
+- **[Wasm-level snapshotting](https://bytecodealliance.org/articles/making-javascript-run-fast-on-webassembly)** — Pre-initializing the QuickJS runtime, polyfills, and static bridge code via wizer eliminates ~2ms of per-execution JS engine startup, yielding a **30x throughput improvement** (483 → 15,000 ops/sec).
+- **[Spectre mitigation analysis](https://arxiv.org/html/2404.12621v1)** — Disabling Cranelift's spectre mitigations for heap/table access (safe because our sandbox lacks high-resolution timing side-channels) provides a **23% throughput improvement**.
+- **Synchronous WASM execution** — Switching from async to sync Wasmtime calls eliminates stack-switching overhead for the sequential execution path.
+- **Copy-on-write instantiation** — Wasmtime's `memory_init_cow` + `InstancePre` pre-linking enables microsecond-scale instance creation from a pre-compiled module template.
 
 ## Other Entry Points
 
@@ -162,7 +170,7 @@ The Docker image is ~120MB and starts in <1 second. The server exposes all REST 
 ## Features
 
 ### Core Runtime
-- **Sub-millisecond sandbox creation** — 600µs benchmarked via Wasmtime AOT compilation
+- **~67µs sandbox creation** — 15,000 ops/sec via wizer pre-initialization, copy-on-write instantiation, and Wasmtime AOT compilation
 - **Fuel metering** — deterministic instruction count caps (identical fuel across runs)
 - **Epoch-based timeouts** — wall-clock deadline enforcement (~2ms precision)
 - **Memory protection** — `trap_on_grow_failure` + `MemoryExceeded` status (not opaque traps)
@@ -302,11 +310,14 @@ Host Application
 # Prerequisites: Rust 1.85+, wasm32-wasip1 target
 rustup target add wasm32-wasip1
 
+# Optional: install wizer for pre-initialization (10x faster sandbox creation)
+cargo install wizer --all-features
+
 # Build everything
 make build
 
 # Or step by step:
-cd guest && ./build.sh          # Build QuickJS-NG WASM guest (~868KB)
+cd guest && ./build.sh          # Build QuickJS-NG WASM guest (~1.1MB with wizer)
 cargo build --release            # Build runtime + CLI
 
 # Run tests
@@ -338,7 +349,7 @@ sandcastle/
 │   │       └── error.rs         # Error hierarchy
 │   ├── sandcastle-cli/      # CLI (run, serve, init, repl, codegen)
 │   └── sandcastle-macros/   # #[sandcastle::capability] proc macro
-├── guest/                   # QuickJS WASM guest runtime
+├── guest/                   # QuickJS WASM guest runtime (wizer pre-initialized)
 ├── sdk/typescript/          # TypeScript SDK
 │   ├── src/
 │   │   ├── client.ts            # SandCastle class
