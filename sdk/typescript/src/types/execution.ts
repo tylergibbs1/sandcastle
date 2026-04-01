@@ -20,6 +20,21 @@ export interface ExecuteOptions {
    */
   input?: unknown;
 
+  /**
+   * Variables injected as globals into the sandbox scope.
+   * Each key becomes a top-level variable accessible in user code.
+   *
+   * @example
+   * ```ts
+   * await sc.execute({
+   *   code: "return greeting + ' ' + name",
+   *   globals: { greeting: "Hello", name: "Alice" }
+   * });
+   * // → "Hello Alice"
+   * ```
+   */
+  globals?: Record<string, unknown>;
+
   /** Resource limits for this execution. */
   limits?: ExecutionLimits;
 
@@ -31,6 +46,18 @@ export interface ExecuteOptions {
    * The sandbox is destroyed and the returned promise rejects with
    * `ExecutionAbortedError`.
    */
+  signal?: AbortSignal;
+}
+
+/** Options for the `run()` shorthand. */
+export interface RunOptions {
+  /** Variables injected as globals into the sandbox. */
+  globals?: Record<string, unknown>;
+  /** JSON input available as `input` in the sandbox. */
+  input?: unknown;
+  /** Resource limits. */
+  limits?: ExecutionLimits;
+  /** Cancellation signal. */
   signal?: AbortSignal;
 }
 
@@ -94,7 +121,7 @@ export type ExecutionStatus =
   | { readonly type: "fuel_exhausted" }
   | { readonly type: "memory_exceeded" }
   | { readonly type: "cancelled" }
-  | { readonly type: "guest_error"; readonly message: string }
+  | { readonly type: "guest_error"; readonly message: string; readonly guestStack?: string }
   | { readonly type: "capability_error"; readonly message: string };
 
 // ---------------------------------------------------------------------------

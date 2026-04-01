@@ -225,6 +225,19 @@ export async function executeViaV8(
       );
     }
 
+    // --- Inject globals ---
+    if (req.globals) {
+      for (const [key, val] of Object.entries(req.globals)) {
+        if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) {
+          throw new Error(`Invalid global name "${key}": must be a valid JavaScript identifier`);
+        }
+        const copy = new iv.ExternalCopy(val);
+        jail.setSync(`__sc_g_${key}`, copy);
+        context.evalSync(`var ${key} = __sc_g_${key}.copy();`);
+        copy.release();
+      }
+    }
+
     // --- Detect async code and build wrapper ---
     const isAsync = /\bawait\b/.test(req.code) || /\basync\b/.test(req.code);
 
@@ -305,8 +318,9 @@ export async function executeViaV8(
       );
     }
 
+    const guestStack = parsed.stack ? cleanGuestStack(parsed.stack, req.code) : undefined;
     return buildResult(
-      { type: "guest_error", message: parsed.error ?? "unknown error" },
+      { type: "guest_error", message: parsed.error ?? "unknown error", guestStack },
       { type: "null" },
       executionId, startedAt, startTime, consoleMessages, limits, heapUsed,
     );
@@ -325,6 +339,19 @@ export async function executeViaV8(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function cleanGuestStack(rawStack: string, userCode: string): string {
+  const lines = userCode.split("\n");
+  // Replace isolated-vm internal references with "sandbox:" prefix
+  // and try to show the offending line from user code
+  return rawStack
+    .replace(/<isolated-vm>/g, "sandbox")
+    .replace(/at\s+<isolated-vm\s+boundary>/g, "")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .slice(0, 10) // limit stack depth
+    .join("\n");
+}
 
 function classifyError(message: string): ExecutionStatus {
   const lower = message.toLowerCase();

@@ -60,9 +60,18 @@ export class MemoryExceededError extends ExecutionFailedError {
 
 /** The guest code threw or returned an error. */
 export class GuestError extends ExecutionFailedError {
+  /** Stack trace from inside the sandbox, if available. */
+  readonly guestStack?: string;
+
   constructor(result: ExecutionResult) {
     super(result);
     this.name = "GuestError";
+    if (result.status.type === "guest_error") {
+      this.guestStack = result.status.guestStack;
+      if (this.guestStack) {
+        this.message = `${this.message}\n\n${this.guestStack}`;
+      }
+    }
   }
 }
 

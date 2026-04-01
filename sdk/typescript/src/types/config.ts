@@ -126,4 +126,10 @@ export interface SandCastleOptions {
    * ```
    */
   snapshotScripts?: string[];
+
+  /**
+   * Execution middleware for logging, metrics, rate-limiting, etc.
+   * Can also be added later with `sc.use(middleware)`.
+   */
+  middleware?: import("../middleware.js").ExecutionMiddleware[];
 }
