@@ -159,11 +159,16 @@ curl -X POST http://localhost:8080/execute \
   -d '{"code": "return input.x * 2", "input": {"x": 21}}'
 ```
 
-### Deploy
+### Deploy with Docker (one command)
 
 ```bash
-docker build -t sandcastle .
-docker run -p 8080:8080 sandcastle
+docker compose up -d
+```
+
+Or without Compose:
+
+```bash
+docker build -t sandcastle . && docker run -p 8080:8080 sandcastle
 ```
 
 The Docker image is ~120MB and starts in <1 second. The server exposes all REST endpoints on port 8080.
