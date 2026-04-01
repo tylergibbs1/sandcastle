@@ -38,7 +38,7 @@ import type { ExecutionContext, ExecutionMiddleware } from "./middleware.js";
  * const sc = SandCastle.permissive(); // generous limits + pooling
  * ```
  */
-export class SandCastle {
+export class SandCastle implements Disposable {
   private readonly opts: SandCastleOptions;
   private pool: IsolatePool | null = null;
   private bunPool: BunWorkerPool | null = null;
@@ -275,8 +275,8 @@ export class SandCastle {
    */
   wrap<TReturn = unknown, TArgs extends unknown[] = unknown[]>(
     code: string,
-    opts?: { limits?: ExecutionLimits },
-  ): (...argsOrGlobals: TArgs | [Record<string, unknown>]) => Promise<TReturn> {
+    opts?: { limits?: NoInfer<ExecutionLimits> },
+  ): (...argsOrGlobals: TArgs | [Record<string, unknown>]) => Promise<NoInfer<TReturn>> {
     return async (...args) => {
       // If single object arg, treat as globals. Otherwise inject as `args` array.
       if (args.length === 1 && typeof args[0] === "object" && args[0] !== null && !Array.isArray(args[0])) {
@@ -493,6 +493,22 @@ export class SandCastle {
     this.cache.clear();
   }
 
+  /**
+   * Supports the TC39 Explicit Resource Management proposal.
+   * Use with `using` for automatic cleanup:
+   *
+   * @example
+   * ```ts
+   * {
+   *   using sc = new SandCastle({ pool: { maxIsolates: 4 } });
+   *   await sc.run("return 1 + 1");
+   * } // pool automatically disposed here
+   * ```
+   */
+  [Symbol.dispose]() {
+    this.dispose();
+  }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +523,7 @@ export class SandCastle {
  * A persistent sandbox session. State (variables, functions) carries across calls.
  * Created via `sc.session()`.
  */
-export class SandboxSession {
+export class SandboxSession implements AsyncDisposable, Disposable {
   private isolate: unknown;
   private context: unknown;
   private disposed = false;
@@ -595,6 +611,26 @@ export class SandboxSession {
     (this.context as InstanceType<typeof iv.Context>).release();
     const iso = this.isolate as InstanceType<typeof iv.Isolate>;
     if (!iso.isDisposed) iso.dispose();
+  }
+
+  /**
+   * Supports `using` for automatic sync cleanup:
+   * ```ts
+   * using session = await sc.session();
+   * ```
+   */
+  [Symbol.dispose]() {
+    this.dispose();
+  }
+
+  /**
+   * Supports `await using` for automatic async cleanup:
+   * ```ts
+   * await using session = await sc.session();
+   * ```
+   */
+  async [Symbol.asyncDispose]() {
+    this.dispose();
   }
 }
 
