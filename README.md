@@ -310,6 +310,97 @@ Host Application
   └── Delivery: Library | CLI | HTTP Server
 ```
 
+## Deployment Guide
+
+### How to choose
+
+SandCastle runs in three modes. Pick the one that fits your deployment:
+
+| Mode | Latency | Best for |
+|------|---------|----------|
+| **Rust library** | ~61µs/call | Rust backends, maximum throughput |
+| **CLI subprocess** | ~5-10ms/call | Node.js/Next.js apps on VPS or containers |
+| **HTTP server** | ~2-3ms + network | Microservice architecture, multi-language backends |
+
+### Next.js / Node.js on a VPS or container
+
+Use the **subprocess mode** (default). The SDK spawns the `sandcastle` binary per call — no server, no sidecar, no Docker required:
+
+```ts
+// app/api/sandbox/route.ts
+import { SandCastle } from "@grayhaven/sandcastle";
+
+const sc = new SandCastle();
+
+export async function POST(req: Request) {
+  const { code, input } = await req.json();
+  const result = await sc.run(code, input);
+  return Response.json(result);
+}
+```
+
+The binary is auto-downloaded on `npm install` for macOS and Linux.
+
+### Next.js with a sidecar (higher throughput)
+
+Run `sandcastle serve` alongside your app for lower per-call overhead:
+
+```ts
+// app/api/sandbox/route.ts
+import { SandCastle } from "@grayhaven/sandcastle";
+
+const sc = new SandCastle({ httpEndpoint: "http://localhost:8080" });
+
+export async function POST(req: Request) {
+  const { code, input } = await req.json();
+  const result = await sc.run(code, input);
+  return Response.json(result);
+}
+```
+
+Start both processes:
+```bash
+sandcastle serve &
+next start
+```
+
+Or use Docker Compose for production:
+```yaml
+services:
+  app:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      SANDCASTLE_URL: http://sandcastle:8080
+  sandcastle:
+    image: ghcr.io/tylergibbs1/sandcastle:latest
+    # or: build with the included Dockerfile
+```
+
+### Vercel / serverless platforms
+
+You cannot run a sidecar or binary on Vercel. Two options:
+
+1. **Deploy SandCastle on a cheap VPS** (Railway, Fly.io, Render) using `docker compose up -d`, then point your Vercel app at it:
+
+```ts
+const sc = new SandCastle({ httpEndpoint: "https://sandcastle.your-domain.com" });
+```
+
+2. **Use isolated-vm instead** if you just need basic JS sandboxing and don't need WASM-level isolation. It's a pure npm package that works in serverless — no binary or sidecar required.
+
+### When to use SandCastle vs alternatives
+
+| Use case | Recommendation |
+|----------|---------------|
+| AI agent tool execution in a Rust backend | **SandCastle** (Rust library, 61µs/call) |
+| Multi-tenant code execution with strict isolation | **SandCastle** (WASM sandbox boundary) |
+| Capability-controlled sandboxes (metered HTTP, KV, quotas) | **SandCastle** (built-in capability bridge) |
+| Deterministic execution with fuel metering and transcripts | **SandCastle** |
+| CPU-heavy JS workloads (JIT matters) | **isolated-vm** (V8 JIT is ~100x faster for compute) |
+| Serverless deployment on Vercel with no infra | **isolated-vm** (pure npm, no binary) |
+| Full Node.js API compatibility needed | **Docker** or **E2B** |
+
 ## Building from Source
 
 ```bash
