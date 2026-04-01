@@ -42,6 +42,7 @@ const LIMIT_DEFAULTS: Required<ExecutionLimits> = {
 
 interface PooledIsolate {
   isolate: InstanceType<typeof import("isolated-vm").Isolate>;
+  context: InstanceType<typeof import("isolated-vm").Context>;
   createdAt: number;
   uses: number;
 }
@@ -95,8 +96,11 @@ export class IsolatePool {
     if (this.snapshot) {
       opts.snapshot = this.snapshot;
     }
+    const isolate = new iv.Isolate(opts as ConstructorParameters<typeof iv.Isolate>[0]);
+    const context = await isolate.createContext();
     return {
-      isolate: new iv.Isolate(opts as ConstructorParameters<typeof iv.Isolate>[0]),
+      isolate,
+      context,
       createdAt: Date.now(),
       uses: 0,
     };
@@ -153,22 +157,24 @@ export async function executeViaV8(
     );
   }
 
-  // Acquire or create isolate
+  // Acquire or create isolate (+ context for pooled mode)
   let poolEntry: PooledIsolate | null = null;
   let isolate: InstanceType<typeof import("isolated-vm").Isolate>;
+  let context: InstanceType<typeof import("isolated-vm").Context>;
   let ownsIsolate: boolean;
 
   if (pool) {
     poolEntry = pool.acquire() ?? await pool.createNew();
     isolate = poolEntry.isolate;
+    context = poolEntry.context;
     ownsIsolate = false;
   } else {
     isolate = new iv.Isolate({ memoryLimit: limits.memoryMb });
+    context = await isolate.createContext();
     ownsIsolate = true;
   }
 
   try {
-    const context = await isolate.createContext();
     const jail = context.global;
 
     // --- Console with streaming callback ---
@@ -217,12 +223,12 @@ export async function executeViaV8(
       const inputCopy = new iv.ExternalCopy(req.input);
       await jail.set("__sc_input", inputCopy);
       await context.eval(
-        "const input = __sc_input.copy(); globalThis.__sandcastle_input = input; delete globalThis.__sc_input;",
+        "var input = __sc_input.copy(); globalThis.__sandcastle_input = input;",
       );
       inputCopy.release();
     } else {
       await context.eval(
-        "const input = undefined; globalThis.__sandcastle_input = undefined;",
+        "var input = undefined; globalThis.__sandcastle_input = undefined;",
       );
     }
 
@@ -314,8 +320,11 @@ export async function executeViaV8(
   } finally {
     if (poolEntry && pool) {
       pool.release(poolEntry);
-    } else if (ownsIsolate && !isolate.isDisposed) {
-      isolate.dispose();
+    } else {
+      context.release();
+      if (ownsIsolate && !isolate.isDisposed) {
+        isolate.dispose();
+      }
     }
   }
 }
