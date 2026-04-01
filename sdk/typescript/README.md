@@ -15,6 +15,6 @@ await evaluate("x * y", { x: 6, y: 7 });    // 42
 await run("return input.x * 2", { x: 21 }); // 42
 ```
 
-**Performance:** 66,000 ops/sec (Bun) / 281,000 ops/sec (Node.js) with pooling enabled.
+**Performance:** 66,000 ops/sec (Bun) / 380,000 ops/sec (Node.js) with pooling enabled.
 
 See the [full documentation](https://github.com/tylergibbs1/sandcastle#readme) for the complete API reference.

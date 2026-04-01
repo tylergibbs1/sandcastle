@@ -10,7 +10,7 @@ SandCastle is a JavaScript sandbox that just works. Install it, run code, get re
 
 ```
 Bun:     66,000 ops/sec  (zero dependencies)
-Node.js: 281,000 ops/sec (via isolated-vm)
+Node.js: 380,000 ops/sec (via isolated-vm)
 ```
 
 ## Quick Start
@@ -323,7 +323,7 @@ SandCastle auto-detects your runtime and picks the best backend:
 | Runtime | Backend | Dependencies | Performance |
 |---------|---------|-------------|-------------|
 | **Bun** | Native Worker threads (JSC) | None | 66,000 ops/sec |
-| **Node.js** | V8 isolates (isolated-vm) | `isolated-vm` | 281,000 ops/sec |
+| **Node.js** | V8 isolates (isolated-vm) | `isolated-vm` | 380,000 ops/sec |
 
 **On Bun:** Each execution runs in a separate Worker thread with its own JavaScriptCore context. Zero npm dependencies — just `bun add @grayhaven/sandcastle` and go.
 
@@ -344,7 +344,7 @@ Enable isolate/worker pooling for maximum throughput:
 const sc = new SandCastle({ pool: { maxIsolates: 8 } });
 ```
 
-This reuses warm isolates/workers across calls instead of creating new ones, which is where the 66K-281K ops/sec numbers come from.
+This reuses warm isolates/workers across calls instead of creating new ones, which is where the 66K-380K ops/sec numbers come from.
 
 ## Using with AI Agents
 
@@ -437,7 +437,7 @@ Works out of the box on Node.js 18+. On Bun-based serverless, zero dependencies.
 | Solution | Install | Latency | Isolation | Dependencies |
 |----------|---------|---------|-----------|-------------|
 | **SandCastle (Bun)** | `bun add` | **15µs pooled** | Worker thread | **None** |
-| **SandCastle (Node)** | `npm install` | **3.5µs pooled** | V8 isolate | `isolated-vm` |
+| **SandCastle (Node)** | `npm install` | **2.6µs pooled** | V8 isolate | `isolated-vm` |
 | isolated-vm (raw) | `npm install` | ~0.5ms | V8 isolate | Native addon |
 | Docker | Docker daemon | ~500ms | Container | Docker |
 | E2B | API key | ~100ms | Firecracker VM | Network |
