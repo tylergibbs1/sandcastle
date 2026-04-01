@@ -27,24 +27,29 @@ function releaseIsolate(entry) {
 }
 
 function newIsolate() {
-  return { isolate: new ivm.Isolate({ memoryLimit: 128 }), createdAt: Date.now(), uses: 0 };
+  const isolate = new ivm.Isolate({ memoryLimit: 128 });
+  const context = isolate.createContextSync();
+  return { isolate, context, createdAt: Date.now(), uses: 0 };
 }
 
 async function execute(code, input, usePool = false) {
   let entry = null;
   let isolate;
+  let context;
   let ownsIsolate = true;
 
   if (usePool) {
     entry = acquireIsolate() ?? newIsolate();
     isolate = entry.isolate;
+    context = entry.context;
     ownsIsolate = false;
   } else {
     isolate = new ivm.Isolate({ memoryLimit: 128 });
+    context = await isolate.createContext();
+    ownsIsolate = true;
   }
 
   try {
-    const context = await isolate.createContext();
     const jail = context.global;
 
     // Input
@@ -54,17 +59,18 @@ async function execute(code, input, usePool = false) {
       copy.release();
     }
 
-    // Minimal wrapper: skip console stub (unused in benchmark)
-    const inputSetup = input !== undefined ? "const input = __input.copy();" : "";
+    // Minimal wrapper
+    // Use var for input to allow redeclaration in reused contexts
+    const inputSetup = input !== undefined ? "var input = __input.copy();" : "";
     const wrapped = `${inputSetup}(()=>{try{return JSON.stringify({ok:true,value:(()=>{${code}})()})}catch(e){return JSON.stringify({ok:false,error:e.message})}})()`;
     const raw = await context.eval(wrapped, { timeout: 10000 });
-    context.release();
     return JSON.parse(String(raw));
   } finally {
     if (entry && usePool) {
       releaseIsolate(entry);
-    } else if (ownsIsolate && !isolate.isDisposed) {
-      isolate.dispose();
+    } else {
+      context.release();
+      if (ownsIsolate && !isolate.isDisposed) isolate.dispose();
     }
   }
 }
