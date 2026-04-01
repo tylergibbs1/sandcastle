@@ -40,8 +40,13 @@
     "postinstall": "node scripts/postinstall.cjs || true",
     "prepublishOnly": "bun run build"
   },
-  "dependencies": {
+  "peerDependencies": {
     "isolated-vm": "^6.1.2"
+  },
+  "peerDependenciesMeta": {
+    "isolated-vm": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

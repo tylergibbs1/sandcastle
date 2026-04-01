@@ -30,14 +30,12 @@ export interface V8PoolOptions {
 /** Configuration for the SandCastle client. */
 export interface SandCastleOptions {
   /**
-   * Execution mode.
-   * - `"v8"` (default): in-process V8 isolate via `isolated-vm` (~0.5ms/call).
-   *   Requires `npm install isolated-vm`.
-   * - `"subprocess"`: spawns the `sandcastle` CLI binary per call (~90ms/call).
-   *   Requires the `sandcastle` binary installed.
+   * Execution mode. Auto-detected by default:
+   * - **Bun** (auto): uses Bun Workers for zero-dependency sandbox isolation
+   * - **Node.js** (auto): uses `isolated-vm` V8 isolates (requires `npm install isolated-vm`)
+   * - `"subprocess"`: spawns the `sandcastle` CLI binary per call
    *
    * Setting `httpEndpoint` overrides this and uses HTTP mode.
-   * @default "v8"
    */
   mode?: "v8" | "subprocess";
 

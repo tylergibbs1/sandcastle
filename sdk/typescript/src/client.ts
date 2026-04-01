@@ -10,6 +10,7 @@ import {
 } from "./core/http.js";
 import { executeViaSubprocess } from "./core/subprocess.js";
 import { executeViaV8, IsolatePool, createSnapshot } from "./core/v8.js";
+import { executeViaBunWorker, BunWorkerPool } from "./core/bun-worker.js";
 import type { SandCastleOptions } from "./types/config.js";
 import type {
   ExecuteOptions,
@@ -51,9 +52,11 @@ import type { ExecutionContext, ExecutionMiddleware } from "./middleware.js";
 export class SandCastle {
   private readonly opts: SandCastleOptions;
   private pool: IsolatePool | null = null;
+  private bunPool: BunWorkerPool | null = null;
   private snapshot: unknown = null;
   private initialized = false;
   private middlewares: ExecutionMiddleware[] = [];
+  private readonly isBun = typeof globalThis.Bun !== "undefined";
 
   constructor(opts: SandCastleOptions = {}) {
     this.opts = opts;
@@ -113,15 +116,24 @@ export class SandCastle {
     if (this.initialized) return;
     this.initialized = true;
     if (this.isHttp || this.isSubprocess) return;
-    if (this.opts.snapshotScripts?.length) {
-      this.snapshot = await createSnapshot(this.opts.snapshotScripts);
-    }
-    if (this.opts.pool) {
-      this.pool = new IsolatePool({
-        ...this.opts.pool,
-        memoryMb: this.opts.defaults?.memoryMb ?? 128,
-        snapshot: this.snapshot as never,
-      });
+
+    if (this.isBun) {
+      // Bun-native: use Worker pool (zero dependencies)
+      if (this.opts.pool) {
+        this.bunPool = new BunWorkerPool(this.opts.pool.maxIsolates ?? 4);
+      }
+    } else {
+      // Node.js: use isolated-vm
+      if (this.opts.snapshotScripts?.length) {
+        this.snapshot = await createSnapshot(this.opts.snapshotScripts);
+      }
+      if (this.opts.pool) {
+        this.pool = new IsolatePool({
+          ...this.opts.pool,
+          memoryMb: this.opts.defaults?.memoryMb ?? 128,
+          snapshot: this.snapshot as never,
+        });
+      }
     }
   }
 
@@ -158,13 +170,23 @@ export class SandCastle {
         result = await executeViaSubprocess(this.opts, options);
       } else {
         await this.ensureInitialized();
-        result = await executeViaV8(
-          options,
-          this.opts.defaults,
-          this.opts.hostFunctions,
-          this.opts.onConsole,
-          this.pool,
-        );
+        if (this.isBun) {
+          result = await executeViaBunWorker(
+            options,
+            this.opts.defaults,
+            this.opts.hostFunctions,
+            this.opts.onConsole,
+            this.bunPool,
+          );
+        } else {
+          result = await executeViaV8(
+            options,
+            this.opts.defaults,
+            this.opts.hostFunctions,
+            this.opts.onConsole,
+            this.pool,
+          );
+        }
       }
     } catch (err) {
       for (const mw of [...this.middlewares].reverse()) {
@@ -334,10 +356,8 @@ export class SandCastle {
 
   /** Dispose the client and release all pooled resources. */
   dispose() {
-    if (this.pool) {
-      this.pool.dispose();
-      this.pool = null;
-    }
+    if (this.pool) { this.pool.dispose(); this.pool = null; }
+    if (this.bunPool) { this.bunPool.dispose(); this.bunPool = null; }
   }
 
   /** Diagnose whether the local SDK install can resolve a working SandCastle binary. */
