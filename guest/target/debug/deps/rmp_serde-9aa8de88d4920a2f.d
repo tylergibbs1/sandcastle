@@ -1,0 +1,10 @@
+/Users/tylergibbs/Projects/sandcastle/guest/target/debug/deps/rmp_serde-9aa8de88d4920a2f.d: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/bytes.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/config.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/decode.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/encode.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/../README.md
+
+/Users/tylergibbs/Projects/sandcastle/guest/target/debug/deps/librmp_serde-9aa8de88d4920a2f.rmeta: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/bytes.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/config.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/decode.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/encode.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/../README.md
+
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/lib.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/bytes.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/config.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/decode.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/encode.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmp-serde-1.3.1/src/../README.md:

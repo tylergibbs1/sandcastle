@@ -12,21 +12,11 @@
     "./codemode": {
       "types": "./dist/codemode/index.d.ts",
       "import": "./dist/codemode/index.js"
-    },
-    "./guest": {
-      "types": "./src/guest/index.d.ts"
     }
   },
   "types": "./dist/index.d.ts",
-  "bin": {
-    "sandcastle": "./bin/sandcastle.cjs"
-  },
   "files": [
-    "dist",
-    "src/guest",
-    "scripts",
-    "bin",
-    "proto"
+    "dist"
   ],
   "scripts": {
     "build": "bun run build:js && bun run build:types",
@@ -37,7 +27,6 @@
     "lint:fix": "biome check --write src/ test/",
     "format": "biome format --write src/ test/",
     "test": "bun test",
-    "postinstall": "node scripts/postinstall.cjs || true",
     "prepublishOnly": "bun run build"
   },
   "peerDependencies": {

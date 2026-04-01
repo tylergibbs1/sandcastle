@@ -83,22 +83,6 @@ export class ExecutionAbortedError extends SandCastleError {
   }
 }
 
-/** The SandCastle binary was not found on the system. */
-export class BinaryNotFoundError extends SandCastleError {
-  readonly binaryPath: string;
-  readonly nextSteps: string[];
-
-  constructor(binaryPath: string) {
-    const nextSteps = binaryResolutionSteps(binaryPath);
-    super(
-      `SandCastle binary not found at "${binaryPath}". ${nextSteps.join(" ")}`,
-    );
-    this.name = "BinaryNotFoundError";
-    this.binaryPath = binaryPath;
-    this.nextSteps = nextSteps;
-  }
-}
-
 /**
  * Build the right error subclass from an `ExecutionResult`.
  * Returns `null` when the result is a success.
@@ -118,19 +102,4 @@ export function errorFromResult(result: ExecutionResult): ExecutionFailedError |
     default:
       return new ExecutionFailedError(result);
   }
-}
-
-function binaryResolutionSteps(binaryPath: string): string[] {
-  const steps = [`Set "binaryPath" if the CLI is installed somewhere else.`];
-
-  if (binaryPath === "sandcastle") {
-    if (process.platform === "darwin" || process.platform === "linux") {
-      steps.unshift("On macOS/Linux, reinstalling the npm package should retry the postinstall binary download.");
-    } else {
-      steps.unshift("Automatic binary download is not available on this platform.");
-    }
-  }
-
-  steps.push("Or install from source with: cargo install --path crates/sandcastle-cli.");
-  return steps;
 }

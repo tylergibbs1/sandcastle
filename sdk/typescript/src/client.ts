@@ -1,14 +1,4 @@
 import { ExecutionAbortedError, errorFromResult } from "./core/errors.js";
-import { diagnoseInstallation } from "./core/diagnostics.js";
-import {
-  createNamespaceViaHttp,
-  deleteNamespaceViaHttp,
-  dispatchViaHttp,
-  executeViaHttp,
-  listScriptsViaHttp,
-  registerViaHttp,
-} from "./core/http.js";
-import { executeViaSubprocess } from "./core/subprocess.js";
 import { executeViaV8, IsolatePool, createSnapshot } from "./core/v8.js";
 import { executeViaBunWorker, BunWorkerPool } from "./core/bun-worker.js";
 import type { SandCastleOptions } from "./types/config.js";
@@ -19,7 +9,6 @@ import type {
   InputArtifact,
   RunOptions,
 } from "./types/execution.js";
-import type { DispatchNamespace, NamespaceConfig, ScriptConfig } from "./types/namespace.js";
 import type { ExecutionContext, ExecutionMiddleware } from "./middleware.js";
 
 /**
@@ -115,7 +104,6 @@ export class SandCastle {
   private async ensureInitialized() {
     if (this.initialized) return;
     this.initialized = true;
-    if (this.isHttp || this.isSubprocess) return;
 
     if (this.isBun) {
       // Bun-native: use Worker pool (zero dependencies)
@@ -137,13 +125,7 @@ export class SandCastle {
     }
   }
 
-  private get isHttp(): boolean {
-    return !!this.opts.httpEndpoint;
-  }
 
-  private get isSubprocess(): boolean {
-    return this.opts.mode === "subprocess";
-  }
 
   /** Execute JavaScript in a fresh sandbox and return the full result. */
   async execute(options: ExecuteOptions): Promise<ExecutionResult> {
@@ -178,29 +160,23 @@ export class SandCastle {
 
     let result: ExecutionResult;
     try {
-      if (this.isHttp) {
-        result = await executeViaHttp(this.opts.httpEndpoint!, execOptions, this.opts.defaults);
-      } else if (this.isSubprocess) {
-        result = await executeViaSubprocess(this.opts, execOptions);
+      await this.ensureInitialized();
+      if (this.isBun) {
+        result = await executeViaBunWorker(
+          execOptions,
+          this.opts.defaults,
+          this.opts.hostFunctions,
+          this.opts.onConsole,
+          this.bunPool,
+        );
       } else {
-        await this.ensureInitialized();
-        if (this.isBun) {
-          result = await executeViaBunWorker(
-            execOptions,
-            this.opts.defaults,
-            this.opts.hostFunctions,
-            this.opts.onConsole,
-            this.bunPool,
-          );
-        } else {
-          result = await executeViaV8(
-            execOptions,
-            this.opts.defaults,
-            this.opts.hostFunctions,
-            this.opts.onConsole,
-            this.pool,
-          );
-        }
+        result = await executeViaV8(
+          execOptions,
+          this.opts.defaults,
+          this.opts.hostFunctions,
+          this.opts.onConsole,
+          this.pool,
+        );
       }
     } catch (err) {
       for (const mw of [...this.middlewares].reverse()) {
@@ -517,80 +493,6 @@ export class SandCastle {
     this.cache.clear();
   }
 
-  /** Diagnose whether the local SDK install can resolve a working SandCastle binary. */
-  async diagnoseInstallation() {
-    return diagnoseInstallation(this.opts.binaryPath ?? "sandcastle");
-  }
-
-  // -------------------------------------------------------------------------
-  // Script registry (requires HTTP mode)
-  // -------------------------------------------------------------------------
-
-  async register(name: string, code: string, config?: ScriptConfig): Promise<void> {
-    this.requireHttp("register");
-    return registerViaHttp(this.opts.httpEndpoint!, name, code, config?.limits);
-  }
-
-  async dispatch(
-    name: string,
-    input?: unknown,
-    limits?: ExecutionLimits,
-  ): Promise<ExecutionResult> {
-    this.requireHttp("dispatch");
-    return dispatchViaHttp(this.opts.httpEndpoint!, name, input, limits);
-  }
-
-  // -------------------------------------------------------------------------
-  // Namespaces (requires HTTP mode)
-  // -------------------------------------------------------------------------
-
-  async createNamespace(name: string, config?: NamespaceConfig): Promise<DispatchNamespace> {
-    this.requireHttp("createNamespace");
-    await createNamespaceViaHttp(this.opts.httpEndpoint!, name, config);
-    return this.namespace(name);
-  }
-
-  async deleteNamespace(name: string): Promise<boolean> {
-    this.requireHttp("deleteNamespace");
-    return deleteNamespaceViaHttp(this.opts.httpEndpoint!, name);
-  }
-
-  namespace(name: string): DispatchNamespace {
-    this.requireHttp("namespace");
-    const endpoint = this.opts.httpEndpoint!;
-
-    return {
-      async register(scriptName: string, code: string, config?: ScriptConfig): Promise<void> {
-        return registerViaHttp(endpoint, scriptName, code, config?.limits, name);
-      },
-      async remove(scriptName: string): Promise<boolean> {
-        const res = await fetch(`${endpoint}/namespaces/${name}/scripts/${scriptName}`, {
-          method: "DELETE",
-        });
-        return res.ok;
-      },
-      async dispatch(scriptName: string, input?: unknown, limits?: ExecutionLimits): Promise<ExecutionResult> {
-        return dispatchViaHttp(endpoint, scriptName, input, limits, name);
-      },
-      async run<T = unknown>(scriptName: string, input?: unknown, limits?: ExecutionLimits): Promise<T> {
-        const result = await dispatchViaHttp(endpoint, scriptName, input, limits, name);
-        const err = errorFromResult(result);
-        if (err) throw err;
-        if (result.output.type === "json") return result.output.value as T;
-        if (result.output.type === "string") return result.output.value as T;
-        return undefined as T;
-      },
-      async listScripts(): Promise<string[]> {
-        return listScriptsViaHttp(endpoint, name);
-      },
-    };
-  }
-
-  private requireHttp(method: string): void {
-    if (!this.isHttp) {
-      throw new Error(`${method}() requires HTTP mode. Set httpEndpoint in SandCastleOptions.`);
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------

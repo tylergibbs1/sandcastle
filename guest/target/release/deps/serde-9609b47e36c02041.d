@@ -1,0 +1,14 @@
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/deps/serde-9609b47e36c02041.d: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/serde-5ca697a6e57af65a/out/private.rs
+
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/deps/libserde-9609b47e36c02041.rlib: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/serde-5ca697a6e57af65a/out/private.rs
+
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/deps/libserde-9609b47e36c02041.rmeta: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/serde-5ca697a6e57af65a/out/private.rs
+
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/build/serde-5ca697a6e57af65a/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/tylergibbs/Projects/sandcastle/guest/target/release/build/serde-5ca697a6e57af65a/out

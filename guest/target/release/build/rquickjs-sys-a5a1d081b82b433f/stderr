@@ -1,0 +1,22 @@
+Apple clang version 21.0.0 (clang-2100.0.123.102)
+Target: aarch64-apple-darwin
+Thread model: posix
+InstalledDir: /Library/Developer/CommandLineTools/usr/bin
+ignoring nonexistent directory "/usr/local/include"
+ignoring nonexistent directory "/usr/include"
+ignoring duplicate directory "/Library/Developer/CommandLineTools/usr/lib/clang/21/include"
+ignoring duplicate directory "/Library/Developer/CommandLineTools/usr/include"
+#include "..." search starts here:
+#include <...> search starts here:
+ /Library/Developer/CommandLineTools/usr/lib/clang/21/include
+ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+ /Library/Developer/CommandLineTools/usr/include
+ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks
+ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/SubFrameworks
+ /System/Library/Frameworks (framework directory)
+ /System/Library/SubFrameworks (framework directory)
+ /Library/Frameworks (framework directory)
+End of search list.
+error: 'rustfmt' is not installed for the toolchain 'stable-aarch64-apple-darwin'.
+To install, run `rustup component add rustfmt`
+Failed to run rustfmt: Internal rustfmt error (non-fatal, continuing)

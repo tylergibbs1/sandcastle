@@ -1,0 +1,14 @@
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/deps/clang_sys-bbb087972547012a.d: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/support.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/link.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/macros.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/common.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/dynamic.rs
+
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/deps/libclang_sys-bbb087972547012a.rlib: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/support.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/link.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/macros.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/common.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/dynamic.rs
+
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/deps/libclang_sys-bbb087972547012a.rmeta: /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/lib.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/support.rs /Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/link.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/macros.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/common.rs /Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/dynamic.rs
+
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/lib.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/support.rs:
+/Users/tylergibbs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/src/link.rs:
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/macros.rs:
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/common.rs:
+/Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out/dynamic.rs:
+
+# env-dep:OUT_DIR=/Users/tylergibbs/Projects/sandcastle/guest/target/release/build/clang-sys-c0c76ff4ec7411a1/out
