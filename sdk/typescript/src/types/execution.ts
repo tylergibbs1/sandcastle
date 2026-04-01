@@ -123,6 +123,9 @@ export interface ExecutionResult {
 
   /** Peak memory usage in bytes (shortcut for `transcript.peakMemoryBytes`). */
   readonly memoryBytes: number;
+
+  /** CPU time consumed in milliseconds (V8 isolate CPU time, Node.js only). */
+  readonly cpuTimeMs: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -151,8 +151,22 @@ export class SandCastle {
       throw new ExecutionAbortedError();
     }
 
+    // Cache check
+    if (this.cacheTtl > 0) {
+      const key = this.getCacheKey(options.code, options.input, options.globals);
+      const cached = this.cache.get(key);
+      if (cached && Date.now() - cached.ts < this.cacheTtl) {
+        return cached.value as ExecutionResult;
+      }
+    }
+
+    // Inject require() if modules are provided
+    const execOptions = this.modules.size > 0
+      ? { ...options, code: `${this.buildRequireGlobal()}\n${options.code}` }
+      : options;
+
     const ctx: ExecutionContext = {
-      options,
+      options: execOptions,
       startTime: Date.now(),
       metadata: {},
     };
@@ -165,14 +179,14 @@ export class SandCastle {
     let result: ExecutionResult;
     try {
       if (this.isHttp) {
-        result = await executeViaHttp(this.opts.httpEndpoint!, options, this.opts.defaults);
+        result = await executeViaHttp(this.opts.httpEndpoint!, execOptions, this.opts.defaults);
       } else if (this.isSubprocess) {
-        result = await executeViaSubprocess(this.opts, options);
+        result = await executeViaSubprocess(this.opts, execOptions);
       } else {
         await this.ensureInitialized();
         if (this.isBun) {
           result = await executeViaBunWorker(
-            options,
+            execOptions,
             this.opts.defaults,
             this.opts.hostFunctions,
             this.opts.onConsole,
@@ -180,7 +194,7 @@ export class SandCastle {
           );
         } else {
           result = await executeViaV8(
-            options,
+            execOptions,
             this.opts.defaults,
             this.opts.hostFunctions,
             this.opts.onConsole,
@@ -193,6 +207,12 @@ export class SandCastle {
         if (mw.onError) await mw.onError(ctx, err as Error);
       }
       throw err;
+    }
+
+    // Cache store
+    if (this.cacheTtl > 0 && result.ok) {
+      const key = this.getCacheKey(options.code, options.input, options.globals);
+      this.cache.set(key, { value: result, ts: Date.now() });
     }
 
     // Run afterExecute middleware (reverse order)
@@ -354,10 +374,147 @@ export class SandCastle {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Data processing
+  // -------------------------------------------------------------------------
+
+  /**
+   * Map over an array in the sandbox. Each item becomes `item` in scope.
+   * Runs all items through the same code, returns transformed array.
+   *
+   * @example
+   * ```ts
+   * await sc.map([1, 2, 3], "return item * 2");
+   * // [2, 4, 6]
+   *
+   * await sc.map(users, "return item.name.toUpperCase()");
+   * // ["ALICE", "BOB", "CHARLIE"]
+   *
+   * // With extra globals
+   * await sc.map([10, 20, 30], "return item * multiplier", { multiplier: 1.1 });
+   * // [11, 22, 33]
+   * ```
+   */
+  async map<TOut = unknown, TIn = unknown>(
+    items: TIn[],
+    code: string,
+    globals?: Record<string, unknown>,
+  ): Promise<TOut[]> {
+    // Run as single batch call for efficiency
+    const batchCode = `return items.map(item => { ${code.startsWith("return") ? code : `return (${code})`} })`;
+    return this.run<TOut[]>(batchCode, { globals: { items, ...(globals ?? {}) } });
+  }
+
+  /**
+   * Pipe a value through a chain of sandboxed transforms.
+   * Each step receives the previous result as `value`.
+   *
+   * @example
+   * ```ts
+   * const result = await sc.pipe(
+   *   [1, 2, 3, 4, 5],
+   *   "return value.filter(x => x > 2)",
+   *   "return value.map(x => x * 10)",
+   *   "return value.reduce((a, b) => a + b, 0)",
+   * );
+   * // 120
+   * ```
+   */
+  async pipe<T = unknown>(initial: unknown, ...steps: string[]): Promise<T> {
+    let value = initial;
+    for (const step of steps) {
+      value = await this.run(step, { globals: { value } });
+    }
+    return value as T;
+  }
+
+  // -------------------------------------------------------------------------
+  // Module system
+  // -------------------------------------------------------------------------
+
+  private modules: Map<string, string> = new Map();
+
+  /**
+   * Provide a module that sandbox code can `require()`.
+   * The module code should assign to `module.exports`.
+   *
+   * @example
+   * ```ts
+   * sc.provide("utils", `
+   *   module.exports = {
+   *     double: (x) => x * 2,
+   *     clamp: (x, min, max) => Math.min(Math.max(x, min), max),
+   *   };
+   * `);
+   *
+   * await sc.run(`
+   *   const { double, clamp } = require("utils");
+   *   return clamp(double(input.x), 0, 100);
+   * `, { x: 60 });
+   * // 100
+   * ```
+   */
+  provide(name: string, code: string): this {
+    this.modules.set(name, code);
+    return this;
+  }
+
+  /**
+   * Build a require() implementation from provided modules.
+   * Injected as a global when modules are registered.
+   * @internal
+   */
+  private buildRequireGlobal(): string | null {
+    if (this.modules.size === 0) return null;
+    const moduleEntries = [...this.modules.entries()]
+      .map(([name, code]) => `${JSON.stringify(name)}: (function() { var module = { exports: {} }; var exports = module.exports; ${code}\n; return module.exports; })()`)
+      .join(",\n");
+    return `var __sc_modules = {${moduleEntries}}; var require = function(name) { if (__sc_modules[name] !== undefined) return __sc_modules[name]; throw new Error("Module not found: " + name); };`;
+  }
+
+  // -------------------------------------------------------------------------
+  // Caching
+  // -------------------------------------------------------------------------
+
+  private cache: Map<string, { value: unknown; ts: number }> = new Map();
+  private cacheTtl = 0;
+
+  /**
+   * Enable result caching. Identical code+input pairs return cached results.
+   *
+   * @example
+   * ```ts
+   * sc.enableCache(5000); // cache for 5 seconds
+   *
+   * await sc.run("return input.x * 2", { x: 21 }); // executes
+   * await sc.run("return input.x * 2", { x: 21 }); // cache hit
+   * await sc.run("return input.x * 2", { x: 22 }); // different input, executes
+   * ```
+   */
+  enableCache(ttlMs = 5000): this {
+    this.cacheTtl = ttlMs;
+    return this;
+  }
+
+  /** Clear the result cache. */
+  clearCache(): this {
+    this.cache.clear();
+    return this;
+  }
+
+  private getCacheKey(code: string, input: unknown, globals?: Record<string, unknown>): string {
+    return JSON.stringify([code, input, globals]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Cleanup
+  // -------------------------------------------------------------------------
+
   /** Dispose the client and release all pooled resources. */
   dispose() {
     if (this.pool) { this.pool.dispose(); this.pool = null; }
     if (this.bunPool) { this.bunPool.dispose(); this.bunPool = null; }
+    this.cache.clear();
   }
 
   /** Diagnose whether the local SDK install can resolve a working SandCastle binary. */

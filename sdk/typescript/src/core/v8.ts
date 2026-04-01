@@ -318,13 +318,14 @@ export async function executeViaV8(
     }
 
     const heapUsed = getHeapUsed(isolate);
+    const cpuTimeNs = getCpuTime(isolate);
     context.release();
 
     if (parsed.ok) {
       const output = valueToOutput(parsed.value, limits.maxOutputBytes);
       return buildResult(
         { type: "success" }, output,
-        executionId, startedAt, startTime, consoleMessages, limits, heapUsed,
+        executionId, startedAt, startTime, consoleMessages, limits, heapUsed, cpuTimeNs,
       );
     }
 
@@ -332,7 +333,7 @@ export async function executeViaV8(
     return buildResult(
       { type: "guest_error", message: parsed.error ?? "unknown error", guestStack },
       { type: "null" },
-      executionId, startedAt, startTime, consoleMessages, limits, heapUsed,
+      executionId, startedAt, startTime, consoleMessages, limits, heapUsed, cpuTimeNs,
     );
   } finally {
     if (poolEntry && pool) {
@@ -400,6 +401,14 @@ function getHeapUsed(isolate: InstanceType<typeof import("isolated-vm").Isolate>
   }
 }
 
+function getCpuTime(isolate: InstanceType<typeof import("isolated-vm").Isolate>): number {
+  try {
+    return Number(isolate.cpuTime) / 1_000_000; // nanoseconds → milliseconds
+  } catch {
+    return 0;
+  }
+}
+
 function buildResult(
   status: ExecutionStatus,
   output: OutputValue,
@@ -409,6 +418,7 @@ function buildResult(
   consoleMessages: ConsoleEntry[],
   limits: Required<ExecutionLimits>,
   peakMemoryBytes: number,
+  cpuTimeMs = 0,
 ): ExecutionResult {
   const finishedAt = new Date().toISOString();
   const transcript: ExecutionTranscript = {
@@ -434,5 +444,6 @@ function buildResult(
     ms,
     value,
     memoryBytes: peakMemoryBytes,
+    cpuTimeMs,
   };
 }
