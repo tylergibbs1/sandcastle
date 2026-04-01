@@ -9,6 +9,7 @@ import {
   registerViaHttp,
 } from "./core/http.js";
 import { executeViaSubprocess } from "./core/subprocess.js";
+import { executeViaV8 } from "./core/v8.js";
 import type { SandCastleOptions } from "./types/config.js";
 import type {
   ExecuteOptions,
@@ -21,15 +22,21 @@ import type { DispatchNamespace, NamespaceConfig, ScriptConfig } from "./types/n
 /**
  * SandCastle client.
  *
- * Executes JavaScript code inside lightweight WASM sandboxes.
- * Supports two modes:
- * - **subprocess** (default): spawns the CLI binary per execution
+ * Executes JavaScript inside isolated V8 sandboxes.
+ * Supports three modes:
+ * - **v8** (default): in-process V8 isolate via `isolated-vm` (~0.5ms/call)
+ * - **subprocess**: spawns the `sandcastle` CLI binary per execution
  * - **HTTP**: talks to a running `sandcastle serve` instance
  *
- * @example Subprocess mode
+ * @example Default (V8 in-process)
  * ```ts
  * const sc = new SandCastle();
  * const result = await sc.run<number>("return 1 + 1");
+ * ```
+ *
+ * @example Subprocess mode (WASM backend)
+ * ```ts
+ * const sc = new SandCastle({ mode: "subprocess" });
  * ```
  *
  * @example HTTP mode with namespaces
@@ -51,6 +58,10 @@ export class SandCastle {
     return !!this.opts.httpEndpoint;
   }
 
+  private get isSubprocess(): boolean {
+    return this.opts.mode === "subprocess";
+  }
+
   /**
    * Execute JavaScript in a fresh sandbox and return the full result.
    */
@@ -62,7 +73,10 @@ export class SandCastle {
     if (this.isHttp) {
       return executeViaHttp(this.opts.httpEndpoint!, options, this.opts.defaults);
     }
-    return executeViaSubprocess(this.opts, options);
+    if (this.isSubprocess) {
+      return executeViaSubprocess(this.opts, options);
+    }
+    return executeViaV8(options, this.opts.defaults);
   }
 
   /**
