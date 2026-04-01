@@ -9,7 +9,7 @@ import {
   registerViaHttp,
 } from "./core/http.js";
 import { executeViaSubprocess } from "./core/subprocess.js";
-import { executeViaV8 } from "./core/v8.js";
+import { executeViaV8, IsolatePool, createSnapshot } from "./core/v8.js";
 import type { SandCastleOptions } from "./types/config.js";
 import type {
   ExecuteOptions,
@@ -34,9 +34,21 @@ import type { DispatchNamespace, NamespaceConfig, ScriptConfig } from "./types/n
  * const result = await sc.run<number>("return 1 + 1");
  * ```
  *
- * @example Subprocess mode (WASM backend)
+ * @example With host functions
  * ```ts
- * const sc = new SandCastle({ mode: "subprocess" });
+ * const sc = new SandCastle({
+ *   hostFunctions: {
+ *     getPrice: (ticker) => prices[ticker],
+ *   },
+ *   onConsole: (level, msg) => console.log(`[${level}] ${msg}`),
+ * });
+ * ```
+ *
+ * @example With isolate pooling (high throughput)
+ * ```ts
+ * const sc = new SandCastle({
+ *   pool: { maxIsolates: 16 },
+ * });
  * ```
  *
  * @example HTTP mode with namespaces
@@ -49,9 +61,37 @@ import type { DispatchNamespace, NamespaceConfig, ScriptConfig } from "./types/n
  */
 export class SandCastle {
   private readonly opts: SandCastleOptions;
+  private pool: IsolatePool | null = null;
+  private snapshot: unknown = null;
+  private initialized = false;
 
   constructor(opts: SandCastleOptions = {}) {
     this.opts = opts;
+  }
+
+  /**
+   * Lazy initialization for pool and snapshot (V8 mode only).
+   * Called automatically on first execute().
+   */
+  private async ensureInitialized() {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    if (this.isHttp || this.isSubprocess) return;
+
+    // Create snapshot if scripts provided
+    if (this.opts.snapshotScripts?.length) {
+      this.snapshot = await createSnapshot(this.opts.snapshotScripts);
+    }
+
+    // Create pool if configured
+    if (this.opts.pool) {
+      this.pool = new IsolatePool({
+        ...this.opts.pool,
+        memoryMb: this.opts.defaults?.memoryMb ?? 128,
+        snapshot: this.snapshot as never,
+      });
+    }
   }
 
   private get isHttp(): boolean {
@@ -76,7 +116,15 @@ export class SandCastle {
     if (this.isSubprocess) {
       return executeViaSubprocess(this.opts, options);
     }
-    return executeViaV8(options, this.opts.defaults);
+
+    await this.ensureInitialized();
+    return executeViaV8(
+      options,
+      this.opts.defaults,
+      this.opts.hostFunctions,
+      this.opts.onConsole,
+      this.pool,
+    );
   }
 
   /**
@@ -95,6 +143,17 @@ export class SandCastle {
   }
 
   /**
+   * Dispose the client and release all pooled resources.
+   * Call this when you're done using the client to free V8 isolates.
+   */
+  dispose() {
+    if (this.pool) {
+      this.pool.dispose();
+      this.pool = null;
+    }
+  }
+
+  /**
    * Diagnose whether the local SDK install can resolve a working SandCastle binary.
    */
   async diagnoseInstallation() {
@@ -105,19 +164,11 @@ export class SandCastle {
   // Script registry (requires HTTP mode)
   // -------------------------------------------------------------------------
 
-  /**
-   * Register a named script for fast dispatch.
-   * Requires HTTP mode (`httpEndpoint` set).
-   */
   async register(name: string, code: string, config?: ScriptConfig): Promise<void> {
     this.requireHttp("register");
     return registerViaHttp(this.opts.httpEndpoint!, name, code, config?.limits);
   }
 
-  /**
-   * Dispatch to a pre-registered script by name.
-   * Requires HTTP mode (`httpEndpoint` set).
-   */
   async dispatch(
     name: string,
     input?: unknown,
@@ -131,36 +182,17 @@ export class SandCastle {
   // Namespaces (requires HTTP mode)
   // -------------------------------------------------------------------------
 
-  /**
-   * Create a dispatch namespace for multi-tenant isolation.
-   * Requires HTTP mode (`httpEndpoint` set).
-   */
   async createNamespace(name: string, config?: NamespaceConfig): Promise<DispatchNamespace> {
     this.requireHttp("createNamespace");
     await createNamespaceViaHttp(this.opts.httpEndpoint!, name, config);
     return this.namespace(name);
   }
 
-  /**
-   * Delete a dispatch namespace.
-   * Requires HTTP mode (`httpEndpoint` set).
-   */
   async deleteNamespace(name: string): Promise<boolean> {
     this.requireHttp("deleteNamespace");
     return deleteNamespaceViaHttp(this.opts.httpEndpoint!, name);
   }
 
-  /**
-   * Get a handle to a dispatch namespace.
-   * Requires HTTP mode (`httpEndpoint` set).
-   *
-   * @example
-   * ```ts
-   * const ns = sc.namespace("tenant-abc");
-   * await ns.register("worker", 'return input.x + 1;');
-   * const result = await ns.run<number>("worker", { x: 41 });
-   * ```
-   */
   namespace(name: string): DispatchNamespace {
     this.requireHttp("namespace");
     const endpoint = this.opts.httpEndpoint!;

@@ -15,8 +15,8 @@ export {
 } from "./core/errors.js";
 export type { InstallationDiagnostics } from "./core/diagnostics.js";
 
-// Types — execution
-export type { SandCastleOptions } from "./types/config.js";
+// Types — config
+export type { SandCastleOptions, HostFunction, OnConsoleCallback, V8PoolOptions } from "./types/config.js";
 export type {
   CapabilityCallEntry,
   ConsoleEntry,

@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ConsoleEntry,
   ExecuteOptions,
   ExecutionLimits,
   ExecutionResult,
   ExecutionStatus,
   ExecutionTranscript,
-  ConsoleEntry,
   OutputValue,
 } from "../types/execution.js";
+import type { HostFunction, OnConsoleCallback, V8PoolOptions } from "../types/config.js";
 
-// isolated-vm is loaded lazily to avoid crashing if not installed
+// ---------------------------------------------------------------------------
+// Lazy isolated-vm loader
+// ---------------------------------------------------------------------------
+
 let ivm: typeof import("isolated-vm") | null = null;
 
 async function getIvm() {
@@ -32,21 +36,101 @@ const LIMIT_DEFAULTS: Required<ExecutionLimits> = {
   maxOutputBytes: 1_048_576,
 };
 
-/**
- * Execute code in-process using a V8 isolate (via isolated-vm).
- *
- * Each call creates a fresh Isolate + Context for full sandbox isolation,
- * then disposes both after execution. This provides:
- * - ~0.5ms per execution (vs ~90ms subprocess, ~2.5ms HTTP)
- * - Full V8 JIT compilation
- * - console.log/warn/error/debug capture
- * - Timeout enforcement
- * - Memory limit enforcement
- * - Structured execution transcripts
- */
+// ---------------------------------------------------------------------------
+// Isolate Pool — reuse warm V8 isolates across executions
+// ---------------------------------------------------------------------------
+
+interface PooledIsolate {
+  isolate: InstanceType<typeof import("isolated-vm").Isolate>;
+  createdAt: number;
+  uses: number;
+}
+
+export class IsolatePool {
+  private pool: PooledIsolate[] = [];
+  private readonly maxSize: number;
+  private readonly maxAge: number;
+  private readonly maxUses: number;
+  private readonly memoryMb: number;
+  private readonly snapshot: InstanceType<typeof import("isolated-vm").ExternalCopy<ArrayBuffer>> | null;
+
+  constructor(opts: V8PoolOptions & { memoryMb: number; snapshot?: InstanceType<typeof import("isolated-vm").ExternalCopy<ArrayBuffer>> | null }) {
+    this.maxSize = opts.maxIsolates ?? 8;
+    this.maxAge = opts.maxAgeMs ?? 30_000;
+    this.maxUses = opts.maxUsesPerIsolate ?? 1000;
+    this.memoryMb = opts.memoryMb;
+    this.snapshot = opts.snapshot ?? null;
+  }
+
+  acquire(): PooledIsolate | null {
+    const now = Date.now();
+    while (this.pool.length > 0) {
+      const entry = this.pool.pop()!;
+      if (entry.isolate.isDisposed) continue;
+      if (now - entry.createdAt > this.maxAge) {
+        entry.isolate.dispose();
+        continue;
+      }
+      if (entry.uses >= this.maxUses) {
+        entry.isolate.dispose();
+        continue;
+      }
+      return entry;
+    }
+    return null;
+  }
+
+  release(entry: PooledIsolate) {
+    entry.uses++;
+    if (this.pool.length < this.maxSize && !entry.isolate.isDisposed) {
+      this.pool.push(entry);
+    } else if (!entry.isolate.isDisposed) {
+      entry.isolate.dispose();
+    }
+  }
+
+  async createNew(): Promise<PooledIsolate> {
+    const iv = await getIvm();
+    const opts: Record<string, unknown> = { memoryLimit: this.memoryMb };
+    if (this.snapshot) {
+      opts.snapshot = this.snapshot;
+    }
+    return {
+      isolate: new iv.Isolate(opts as ConstructorParameters<typeof iv.Isolate>[0]),
+      createdAt: Date.now(),
+      uses: 0,
+    };
+  }
+
+  dispose() {
+    for (const entry of this.pool) {
+      if (!entry.isolate.isDisposed) entry.isolate.dispose();
+    }
+    this.pool = [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot support — pre-warm V8 with libraries
+// ---------------------------------------------------------------------------
+
+export async function createSnapshot(scripts: string[]): Promise<InstanceType<typeof import("isolated-vm").ExternalCopy<ArrayBuffer>>> {
+  const iv = await getIvm();
+  return iv.Isolate.createSnapshot(
+    scripts.map((code) => ({ code })),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main execution
+// ---------------------------------------------------------------------------
+
 export async function executeViaV8(
   req: ExecuteOptions,
   defaults?: ExecutionLimits,
+  hostFunctions?: Record<string, HostFunction>,
+  onConsole?: OnConsoleCallback,
+  pool?: IsolatePool | null,
 ): Promise<ExecutionResult> {
   const iv = await getIvm();
   const limits: Required<ExecutionLimits> = {
@@ -60,138 +144,155 @@ export async function executeViaV8(
   const startTime = performance.now();
   const consoleMessages: ConsoleEntry[] = [];
 
-  // Create isolate with memory limit
-  const isolate = new iv.Isolate({ memoryLimit: limits.memoryMb });
+  // Cancelled before start
+  if (req.signal?.aborted) {
+    return buildResult(
+      { type: "cancelled" },
+      { type: "null" },
+      executionId, startedAt, startTime, consoleMessages, limits, 0,
+    );
+  }
+
+  // Acquire or create isolate
+  let poolEntry: PooledIsolate | null = null;
+  let isolate: InstanceType<typeof import("isolated-vm").Isolate>;
+  let ownsIsolate: boolean;
+
+  if (pool) {
+    poolEntry = pool.acquire() ?? await pool.createNew();
+    isolate = poolEntry.isolate;
+    ownsIsolate = false;
+  } else {
+    isolate = new iv.Isolate({ memoryLimit: limits.memoryMb });
+    ownsIsolate = true;
+  }
 
   try {
-    // Check AbortSignal before starting
-    if (req.signal?.aborted) {
-      return buildResult(
-        { type: "cancelled" },
-        { type: "null" },
-        executionId,
-        startedAt,
-        startTime,
-        consoleMessages,
-        limits,
-        0,
-      );
-    }
-
     const context = await isolate.createContext();
     const jail = context.global;
 
-    // --- Inject console ---
-    await jail.set("__console_messages", new iv.ExternalCopy([]));
+    // --- Console with streaming callback ---
+    // We use a Callback to stream console messages to the host in real-time,
+    // while also collecting them for the transcript.
+    const consoleCallback = new iv.Callback(
+      (levelStr: string, message: string) => {
+        const level = levelStr as ConsoleEntry["level"];
+        const ts = Math.round(performance.now() - startTime);
+        consoleMessages.push({ level, message, ts });
+        if (onConsole) {
+          onConsole(level, message, ts);
+        }
+      },
+      { async: false },
+    );
+    await jail.set("__sc_console_cb", consoleCallback);
 
     await context.eval(`
-      const __msgs = [];
       const console = {
-        log:   (...a) => __msgs.push({ level: "log",   message: a.map(String).join(" "), ts: Date.now() }),
-        warn:  (...a) => __msgs.push({ level: "warn",  message: a.map(String).join(" "), ts: Date.now() }),
-        error: (...a) => __msgs.push({ level: "error", message: a.map(String).join(" "), ts: Date.now() }),
-        debug: (...a) => __msgs.push({ level: "debug", message: a.map(String).join(" "), ts: Date.now() }),
+        log:   (...a) => __sc_console_cb("log",   a.map(String).join(" ")),
+        warn:  (...a) => __sc_console_cb("warn",  a.map(String).join(" ")),
+        error: (...a) => __sc_console_cb("error", a.map(String).join(" ")),
+        debug: (...a) => __sc_console_cb("debug", a.map(String).join(" ")),
       };
     `);
+
+    // --- Inject host functions ---
+    if (hostFunctions && Object.keys(hostFunctions).length > 0) {
+      for (const [name, fn] of Object.entries(hostFunctions)) {
+        const cb = new iv.Callback(
+          (...args: unknown[]) => {
+            const result = fn(...args);
+            // If it returns a promise, we can't handle that in sync mode.
+            // Return the value directly.
+            return result;
+          },
+          { async: false },
+        );
+        await jail.set(name, cb);
+      }
+    }
 
     // --- Inject input ---
     if (req.input !== undefined) {
       const inputCopy = new iv.ExternalCopy(req.input);
-      await jail.set("__input_copy", inputCopy);
-      await context.eval("const input = __input_copy.copy(); globalThis.__sandcastle_input = input;");
+      await jail.set("__sc_input", inputCopy);
+      await context.eval(
+        "const input = __sc_input.copy(); globalThis.__sandcastle_input = input; delete globalThis.__sc_input;",
+      );
       inputCopy.release();
     } else {
-      await context.eval("const input = undefined; globalThis.__sandcastle_input = undefined;");
+      await context.eval(
+        "const input = undefined; globalThis.__sandcastle_input = undefined;",
+      );
     }
 
-    // --- Build user code wrapper ---
-    // Wrap user code in a function that captures the return value
-    const wrappedCode = `
-      (function() {
-        const __startTs = Date.now();
-        try {
-          const __result = (function() { ${req.code} })();
-          const __consoleMsgs = __msgs.map(m => ({
-            ...m,
-            ts: m.ts - __startTs
-          }));
-          return JSON.stringify({
-            ok: true,
-            value: __result,
-            console: __consoleMsgs
-          });
-        } catch (e) {
-          const __consoleMsgs = __msgs.map(m => ({
-            ...m,
-            ts: m.ts - __startTs
-          }));
-          return JSON.stringify({
-            ok: false,
-            error: e instanceof Error ? e.message : String(e),
-            stack: e instanceof Error ? e.stack : undefined,
-            console: __consoleMsgs
-          });
-        }
-      })()
-    `;
+    // --- Detect async code and build wrapper ---
+    const isAsync = /\bawait\b/.test(req.code) || /\basync\b/.test(req.code);
 
-    // --- Execute with timeout ---
+    let wrappedCode: string;
+    if (isAsync) {
+      // Async wrapper: supports top-level await and async functions
+      wrappedCode = `
+        (async function() {
+          try {
+            const __result = await (async function() { ${req.code} })();
+            return JSON.stringify({ ok: true, value: __result });
+          } catch (e) {
+            return JSON.stringify({
+              ok: false,
+              error: e instanceof Error ? e.message : String(e),
+              stack: e instanceof Error ? e.stack : undefined,
+            });
+          }
+        })()
+      `;
+    } else {
+      // Sync wrapper: faster path, no promise overhead
+      wrappedCode = `
+        (function() {
+          try {
+            const __result = (function() { ${req.code} })();
+            return JSON.stringify({ ok: true, value: __result });
+          } catch (e) {
+            return JSON.stringify({
+              ok: false,
+              error: e instanceof Error ? e.message : String(e),
+              stack: e instanceof Error ? e.stack : undefined,
+            });
+          }
+        })()
+      `;
+    }
+
+    // --- Execute ---
     let rawResult: string;
     try {
-      const result = await context.eval(wrappedCode, {
-        timeout: limits.timeoutMs,
-      });
-      rawResult = String(result);
+      if (isAsync) {
+        // For async code, eval returns a Reference to a Promise.
+        // Use .copy() to resolve it with the timeout.
+        const ref = await context.eval(wrappedCode, { timeout: limits.timeoutMs, promise: true });
+        rawResult = String(ref);
+      } else {
+        const result = await context.eval(wrappedCode, { timeout: limits.timeoutMs });
+        rawResult = String(result);
+      }
     } catch (e: unknown) {
-      // Timeout or memory errors from isolated-vm
       const message = e instanceof Error ? e.message : String(e);
-
-      // Try to extract console messages even on crash
-      try {
-        const msgs = await context.eval("JSON.stringify(__msgs)");
-        const parsed = JSON.parse(String(msgs));
-        for (const m of parsed) {
-          consoleMessages.push({ level: m.level, message: m.message, ts: m.ts });
-        }
-      } catch { /* ignore */ }
-
       const status = classifyError(message);
       context.release();
       return buildResult(
-        status,
-        { type: "null" },
-        executionId,
-        startedAt,
-        startTime,
-        consoleMessages,
-        limits,
+        status, { type: "null" },
+        executionId, startedAt, startTime, consoleMessages, limits,
         getHeapUsed(isolate),
       );
     }
 
     // --- Parse result ---
-    let parsed: {
-      ok: boolean;
-      value?: unknown;
-      error?: string;
-      stack?: string;
-      console?: Array<{ level: string; message: string; ts: number }>;
-    };
+    let parsed: { ok: boolean; value?: unknown; error?: string; stack?: string };
     try {
       parsed = JSON.parse(rawResult);
     } catch {
       parsed = { ok: true, value: rawResult };
-    }
-
-    // Collect console messages
-    if (parsed.console) {
-      for (const m of parsed.console) {
-        consoleMessages.push({
-          level: m.level as ConsoleEntry["level"],
-          message: m.message,
-          ts: m.ts,
-        });
-      }
     }
 
     const heapUsed = getHeapUsed(isolate);
@@ -200,30 +301,20 @@ export async function executeViaV8(
     if (parsed.ok) {
       const output = valueToOutput(parsed.value, limits.maxOutputBytes);
       return buildResult(
-        { type: "success" },
-        output,
-        executionId,
-        startedAt,
-        startTime,
-        consoleMessages,
-        limits,
-        heapUsed,
+        { type: "success" }, output,
+        executionId, startedAt, startTime, consoleMessages, limits, heapUsed,
       );
     }
 
-    // Guest error
     return buildResult(
       { type: "guest_error", message: parsed.error ?? "unknown error" },
       { type: "null" },
-      executionId,
-      startedAt,
-      startTime,
-      consoleMessages,
-      limits,
-      heapUsed,
+      executionId, startedAt, startTime, consoleMessages, limits, heapUsed,
     );
   } finally {
-    if (!isolate.isDisposed) {
+    if (poolEntry && pool) {
+      pool.release(poolEntry);
+    } else if (ownsIsolate && !isolate.isDisposed) {
       isolate.dispose();
     }
   }
@@ -246,18 +337,11 @@ function classifyError(message: string): ExecutionStatus {
 
 function valueToOutput(value: unknown, maxBytes: number): OutputValue {
   if (value === null || value === undefined) return { type: "null" };
-
   if (typeof value === "string") {
-    if (value.length > maxBytes) {
-      return { type: "string", value: value.slice(0, maxBytes) };
-    }
-    return { type: "string", value };
+    return value.length > maxBytes
+      ? { type: "string", value: value.slice(0, maxBytes) }
+      : { type: "string", value };
   }
-
-  // Everything else → JSON
-  const output: OutputValue = { type: "json", value };
-
-  // Check size limit
   try {
     const serialized = JSON.stringify(value);
     if (serialized.length > maxBytes) {
@@ -266,14 +350,12 @@ function valueToOutput(value: unknown, maxBytes: number): OutputValue {
   } catch {
     return { type: "string", value: String(value) };
   }
-
-  return output;
+  return { type: "json", value };
 }
 
 function getHeapUsed(isolate: InstanceType<typeof import("isolated-vm").Isolate>): number {
   try {
-    const stats = isolate.getHeapStatisticsSync();
-    return stats.used_heap_size;
+    return isolate.getHeapStatisticsSync().used_heap_size;
   } catch {
     return 0;
   }
@@ -291,10 +373,7 @@ function buildResult(
 ): ExecutionResult {
   const finishedAt = new Date().toISOString();
   const transcript: ExecutionTranscript = {
-    executionId,
-    startedAt,
-    finishedAt,
-    status,
+    executionId, startedAt, finishedAt, status,
     fuelConsumed: 0,
     fuelLimit: limits.fuel,
     peakMemoryBytes,
@@ -303,12 +382,5 @@ function buildResult(
     console: consoleMessages,
     capabilityCalls: [],
   };
-
-  return {
-    ok: status.type === "success",
-    status,
-    output,
-    transcript,
-    outputArtifacts: [],
-  };
+  return { ok: status.type === "success", status, output, transcript, outputArtifacts: [] };
 }
