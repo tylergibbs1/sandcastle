@@ -1,5 +1,5 @@
 // Client
-export { jsonArtifact, SandCastle, textArtifact } from "./client.js";
+export { jsonArtifact, SandCastle, SandboxSession, textArtifact } from "./client.js";
 export { diagnoseInstallation } from "./core/diagnostics.js";
 
 // Zero-config standalone functions

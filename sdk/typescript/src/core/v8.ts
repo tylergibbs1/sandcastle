@@ -192,11 +192,21 @@ export async function executeViaV8(
     jail.setSync("__sc_console_cb", consoleCallback);
 
     context.evalSync(`
+      var __sc_timers = {};
       var console = {
         log:   (...a) => __sc_console_cb("log",   a.map(String).join(" ")),
         warn:  (...a) => __sc_console_cb("warn",  a.map(String).join(" ")),
         error: (...a) => __sc_console_cb("error", a.map(String).join(" ")),
         debug: (...a) => __sc_console_cb("debug", a.map(String).join(" ")),
+        time:  (label) => { __sc_timers[label || "default"] = Date.now(); },
+        timeEnd: (label) => {
+          var k = label || "default", s = __sc_timers[k];
+          if (s !== undefined) { delete __sc_timers[k]; __sc_console_cb("log", k + ": " + (Date.now() - s) + "ms"); }
+        },
+        timeLog: (label) => {
+          var k = label || "default", s = __sc_timers[k];
+          if (s !== undefined) { __sc_console_cb("log", k + ": " + (Date.now() - s) + "ms"); }
+        },
       };
     `);
 
@@ -411,5 +421,18 @@ function buildResult(
     console: consoleMessages,
     capabilityCalls: [],
   };
-  return { ok: status.type === "success", status, output, transcript, outputArtifacts: [] };
+  const ms = Math.round(performance.now() - startTime);
+  const value = output.type === "json" ? output.value : output.type === "string" ? output.value : undefined;
+
+  return {
+    ok: status.type === "success",
+    status,
+    output,
+    transcript,
+    outputArtifacts: [],
+    logs: consoleMessages,
+    ms,
+    value,
+    memoryBytes: peakMemoryBytes,
+  };
 }

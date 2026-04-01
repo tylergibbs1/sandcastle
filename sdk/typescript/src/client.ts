@@ -241,6 +241,97 @@ export class SandCastle {
     return this.run<T>(`return (${expression})`, { globals });
   }
 
+  /**
+   * Create a reusable sandboxed function. Call it like a normal function.
+   *
+   * @example
+   * ```ts
+   * const double = sc.wrap<number, [number]>("return args[0] * 2");
+   * await double(21);  // 42
+   * await double(5);   // 10
+   *
+   * // With named params
+   * const greet = sc.wrap<string>("return `Hello, ${name}!`");
+   * await greet({ name: "Alice" });  // "Hello, Alice!"
+   * ```
+   */
+  wrap<TReturn = unknown, TArgs extends unknown[] = unknown[]>(
+    code: string,
+    opts?: { limits?: ExecutionLimits },
+  ): (...argsOrGlobals: TArgs | [Record<string, unknown>]) => Promise<TReturn> {
+    return async (...args) => {
+      // If single object arg, treat as globals. Otherwise inject as `args` array.
+      if (args.length === 1 && typeof args[0] === "object" && args[0] !== null && !Array.isArray(args[0])) {
+        return this.run<TReturn>(code, { globals: args[0] as Record<string, unknown>, limits: opts?.limits });
+      }
+      return this.run<TReturn>(code, { globals: { args }, limits: opts?.limits });
+    };
+  }
+
+  /**
+   * Create a persistent sandbox session. State carries across calls.
+   *
+   * @example
+   * ```ts
+   * const session = await sc.session();
+   * await session.run("var counter = 0");
+   * await session.run("counter++");
+   * await session.run<number>("return counter");  // 1
+   * session.dispose();
+   * ```
+   */
+  async session(limits?: ExecutionLimits): Promise<SandboxSession> {
+    await this.ensureInitialized();
+    return SandboxSession.create(limits ?? this.opts.defaults);
+  }
+
+  /**
+   * Run multiple scripts in parallel. Returns results in order.
+   *
+   * @example
+   * ```ts
+   * const results = await sc.batch([
+   *   { code: "return 1 + 1" },
+   *   { code: "return 2 + 2" },
+   *   { code: "return 3 + 3" },
+   * ]);
+   * // [2, 4, 6]
+   * ```
+   */
+  async batch<T = unknown>(
+    items: Array<string | ExecuteOptions>,
+  ): Promise<T[]> {
+    const promises = items.map((item) => {
+      const opts = typeof item === "string" ? { code: item } : item;
+      return this.run<T>(opts.code, {
+        input: opts.input,
+        globals: opts.globals,
+        limits: opts.limits,
+      });
+    });
+    return Promise.all(promises);
+  }
+
+  /**
+   * Test if code runs without errors. Returns `true` on success, `false` on failure.
+   * Never throws.
+   *
+   * @example
+   * ```ts
+   * await sc.test("return 1 + 1");           // true
+   * await sc.test("throw new Error('no')");   // false
+   * await sc.test("while(true){}");           // false (timeout)
+   * ```
+   */
+  async test(code: string, limits?: ExecutionLimits): Promise<boolean> {
+    try {
+      const result = await this.execute({ code, limits: { timeoutMs: 5_000, ...limits } });
+      return result.ok;
+    } catch {
+      return false;
+    }
+  }
+
   /** Dispose the client and release all pooled resources. */
   dispose() {
     if (this.pool) {
@@ -328,6 +419,105 @@ export class SandCastle {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// SandboxSession — persistent state across calls
+// ---------------------------------------------------------------------------
+
+/**
+ * A persistent sandbox session. State (variables, functions) carries across calls.
+ * Created via `sc.session()`.
+ */
+export class SandboxSession {
+  private isolate: unknown;
+  private context: unknown;
+  private disposed = false;
+  private iv: typeof import("isolated-vm") | null = null;
+
+  private constructor() {}
+
+  /** @internal */
+  static async create(limits?: ExecutionLimits): Promise<SandboxSession> {
+    const session = new SandboxSession();
+    try {
+      session.iv = await import("isolated-vm");
+    } catch {
+      throw new Error("isolated-vm is required for sessions. Install it: npm install isolated-vm");
+    }
+    const iv = session.iv;
+    const memoryMb = limits?.memoryMb ?? 128;
+    session.isolate = new iv.Isolate({ memoryLimit: memoryMb });
+    session.context = (session.isolate as InstanceType<typeof iv.Isolate>).createContextSync();
+
+    // Set up console
+    const ctx = session.context as InstanceType<typeof iv.Context>;
+    ctx.evalSync(`
+      var console = { log(){}, warn(){}, error(){}, debug(){} };
+      var __sc_timers = {};
+      console.time = (label) => { __sc_timers[label || 'default'] = Date.now(); };
+      console.timeEnd = (label) => {
+        const k = label || 'default';
+        const start = __sc_timers[k];
+        if (start) { delete __sc_timers[k]; }
+      };
+    `);
+    return session;
+  }
+
+  /**
+   * Run code in this session. Variables persist across calls.
+   * Use `var` for declarations that should persist.
+   *
+   * @example
+   * ```ts
+   * await session.run("var counter = 0");
+   * await session.run("counter++");
+   * await session.run<number>("return counter"); // 1
+   * ```
+   */
+  async run<T = unknown>(code: string, globals?: Record<string, unknown>): Promise<T> {
+    if (this.disposed) throw new Error("Session has been disposed");
+    const iv = this.iv!;
+    const ctx = this.context as InstanceType<typeof iv.Context>;
+    const jail = ctx.global;
+
+    if (globals) {
+      for (const [key, val] of Object.entries(globals)) {
+        const copy = new iv.ExternalCopy(val);
+        jail.setSync(`__sg_${key}`, copy);
+        ctx.evalSync(`var ${key} = __sg_${key}.copy();`);
+        copy.release();
+      }
+    }
+
+    // If code starts with `return`, wrap in IIFE + serialize.
+    // Otherwise execute at top-level scope so declarations persist.
+    if (code.trimStart().startsWith("return ")) {
+      const wrapped = `JSON.stringify((()=>{${code}})())`;
+      const raw = ctx.evalSync(wrapped, { timeout: 10000 });
+      const s = String(raw);
+      return (s === "undefined" ? undefined : JSON.parse(s)) as T;
+    }
+
+    ctx.evalSync(code, { timeout: 10000 });
+    return undefined as T;
+  }
+
+  /** Evaluate an expression in this session. No `return` needed. */
+  async eval<T = unknown>(expression: string, globals?: Record<string, unknown>): Promise<T> {
+    return this.run<T>(`return (${expression})`, globals);
+  }
+
+  /** Dispose the session and free V8 resources. */
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    const iv = this.iv!;
+    (this.context as InstanceType<typeof iv.Context>).release();
+    const iso = this.isolate as InstanceType<typeof iv.Isolate>;
+    if (!iso.isDisposed) iso.dispose();
+  }
+}
 
 function isRunOptions(val: unknown): val is RunOptions {
   if (typeof val !== "object" || val === null) return false;

@@ -109,6 +109,20 @@ export interface ExecutionResult {
 
   /** Files written by the guest to `/output/`. */
   readonly outputArtifacts: OutputArtifact[];
+
+  // ---- Convenience shortcuts ----
+
+  /** Console log messages (shortcut for `transcript.console`). */
+  readonly logs: readonly ConsoleEntry[];
+
+  /** Wall-clock execution time in milliseconds. */
+  readonly ms: number;
+
+  /** The unwrapped output value (shortcut for `output.value`). `undefined` if null/void. */
+  readonly value: unknown;
+
+  /** Peak memory usage in bytes (shortcut for `transcript.peakMemoryBytes`). */
+  readonly memoryBytes: number;
 }
 
 // ---------------------------------------------------------------------------
