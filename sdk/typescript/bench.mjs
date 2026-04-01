@@ -59,12 +59,16 @@ async function execute(code, input, usePool = false) {
       copy.release();
     }
 
-    // Minimal wrapper
-    // Use var for input to allow redeclaration in reused contexts
+    // Fast path: strip `return` and eval expression directly (avoids IIFE)
     const inputSetup = input !== undefined ? "var input = __input.copy();" : "";
-    const wrapped = `${inputSetup}(()=>{try{return JSON.stringify({ok:true,value:(()=>{${code}})()})}catch(e){return JSON.stringify({ok:false,error:e.message})}})()`;
-    const raw = context.evalSync(wrapped, { timeout: 10000 });
-    return JSON.parse(String(raw));
+    const trimmed = code.trimStart();
+    const expr = trimmed.startsWith("return ") ? trimmed.slice(7) : `(()=>{${code}})()`;
+    try {
+      const value = context.evalSync(`${inputSetup}${expr}`, { timeout: 10000, copy: true });
+      return { ok: true, value };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   } finally {
     if (entry && usePool) {
       releaseIsolate(entry);

@@ -248,93 +248,50 @@ export async function executeViaV8(
       }
     }
 
-    // --- Detect async code and build wrapper ---
+    // --- Build expression from user code ---
     const isAsync = /\bawait\b/.test(req.code) || /\basync\b/.test(req.code);
-
-    let wrappedCode: string;
-    if (isAsync) {
-      // Async wrapper: supports top-level await and async functions
-      wrappedCode = `
-        (async function() {
-          try {
-            const __result = await (async function() { ${req.code} })();
-            return JSON.stringify({ ok: true, value: __result });
-          } catch (e) {
-            return JSON.stringify({
-              ok: false,
-              error: e instanceof Error ? e.message : String(e),
-              stack: e instanceof Error ? e.stack : undefined,
-            });
-          }
-        })()
-      `;
-    } else {
-      // Sync wrapper: faster path, no promise overhead
-      wrappedCode = `
-        (function() {
-          try {
-            const __result = (function() { ${req.code} })();
-            return JSON.stringify({ ok: true, value: __result });
-          } catch (e) {
-            return JSON.stringify({
-              ok: false,
-              error: e instanceof Error ? e.message : String(e),
-              stack: e instanceof Error ? e.stack : undefined,
-            });
-          }
-        })()
-      `;
-    }
+    const trimmed = req.code.trimStart();
+    // Fast path: strip `return` and eval as expression (avoids IIFE overhead)
+    const expr = trimmed.startsWith("return ") ? trimmed.slice(7) : `(()=>{${req.code}})()`;
 
     // --- Execute ---
-    let rawResult: string;
+    // Errors are caught externally (faster than try/catch inside sandbox).
+    // Results use structured clone ({ copy: true }) instead of JSON roundtrip.
     try {
+      let value: unknown;
       if (isAsync) {
-        // For async code, eval returns a Promise — must use async eval.
-        const ref = await context.eval(wrappedCode, { timeout: limits.timeoutMs, promise: true });
-        rawResult = String(ref);
+        const asyncExpr = `(async()=>{${req.code}})()`;
+        value = await context.eval(asyncExpr, { timeout: limits.timeoutMs, promise: true, copy: true });
       } else {
-        // Sync path: evalSync avoids microtask/promise overhead (~3.7x faster)
-        const result = context.evalSync(wrappedCode, { timeout: limits.timeoutMs });
-        rawResult = String(result);
+        value = context.evalSync(expr, { timeout: limits.timeoutMs, copy: true });
       }
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      const status = classifyError(message);
-      context.release();
-      return buildResult(
-        status, { type: "null" },
-        executionId, startedAt, startTime, consoleMessages, limits,
-        getHeapUsed(isolate),
-      );
-    }
 
-    // --- Parse result ---
-    let parsed: { ok: boolean; value?: unknown; error?: string; stack?: string };
-    try {
-      parsed = JSON.parse(rawResult);
-    } catch {
-      parsed = { ok: true, value: rawResult };
-    }
-
-    const heapUsed = getHeapUsed(isolate);
-    const cpuTimeNs = getCpuTime(isolate);
-    context.release();
-
-    if (parsed.ok) {
-      const output = valueToOutput(parsed.value, limits.maxOutputBytes);
+      const heapUsed = getHeapUsed(isolate);
+      const cpuTimeNs = getCpuTime(isolate);
+      const output = valueToOutput(value, limits.maxOutputBytes);
       return buildResult(
         { type: "success" }, output,
         executionId, startedAt, startTime, consoleMessages, limits, heapUsed, cpuTimeNs,
       );
-    }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      const stack = e instanceof Error ? e.stack : undefined;
+      const heapUsed = getHeapUsed(isolate);
+      const cpuTimeNs = getCpuTime(isolate);
 
-    const guestStack = parsed.stack ? cleanGuestStack(parsed.stack, req.code) : undefined;
-    return buildResult(
-      { type: "guest_error", message: parsed.error ?? "unknown error", guestStack },
-      { type: "null" },
-      executionId, startedAt, startTime, consoleMessages, limits, heapUsed, cpuTimeNs,
-    );
+      const status = classifyError(message);
+      if (status.type === "guest_error" && stack) {
+        const guestStack = cleanGuestStack(stack, req.code);
+        return buildResult(
+          { type: "guest_error", message, guestStack }, { type: "null" },
+          executionId, startedAt, startTime, consoleMessages, limits, heapUsed, cpuTimeNs,
+        );
+      }
+      return buildResult(
+        status, { type: "null" },
+        executionId, startedAt, startTime, consoleMessages, limits, heapUsed, cpuTimeNs,
+      );
+    }
   } finally {
     if (poolEntry && pool) {
       pool.release(poolEntry);
