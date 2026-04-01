@@ -1,6 +1,6 @@
 {
   "name": "@grayhaven/sandcastle",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "The fastest way to run untrusted JavaScript safely. Zero-config, Bun-first.",
   "license": "(MIT OR Apache-2.0)",
   "type": "module",
