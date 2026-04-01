@@ -1,0 +1,22 @@
+{
+  "tag": "v8-apr01",
+  "modifiable_files": [
+    "src/core/v8.ts",
+    "bench.mjs"
+  ],
+  "readonly_files": [
+    "src/client.ts",
+    "src/types/config.ts",
+    "src/types/execution.ts",
+    "src/index.ts",
+    "package.json"
+  ],
+  "run_command": "node bench.mjs 2>&1",
+  "metric_grep": "^  Ops/sec:",
+  "metric_name": "pooled_ops_sec",
+  "metric_direction": "higher",
+  "timeout_seconds": 120,
+  "setup_check": "node -e 'require(\"isolated-vm\")' 2>&1",
+  "no_new_dependencies": true,
+  "soft_constraints": "Don't break any existing tests or the public API. The bench.mjs output format must stay consistent (grep for 'Ops/sec:'). Focus on the pooled path since that's what production users will use."
+}
