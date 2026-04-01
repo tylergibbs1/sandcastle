@@ -47,18 +47,16 @@ async function execute(code, input, usePool = false) {
     const context = await isolate.createContext();
     const jail = context.global;
 
-    // Console stub
-    await context.eval(`const console = { log(){}, warn(){}, error(){}, debug(){} };`);
-
     // Input
     if (input !== undefined) {
       const copy = new ivm.ExternalCopy(input);
       await jail.set("__input", copy);
-      await context.eval("const input = __input.copy();");
       copy.release();
     }
 
-    const wrapped = `(() => { try { return JSON.stringify({ok:true,value:(()=>{${code}})()}); } catch(e) { return JSON.stringify({ok:false,error:e.message}); } })()`;
+    // Single eval: console stub + input copy + user code (saves 1-2 eval round-trips)
+    const inputSetup = input !== undefined ? "const input = __input.copy();" : "";
+    const wrapped = `const console={log(){},warn(){},error(){},debug(){}};${inputSetup}(() => { try { return JSON.stringify({ok:true,value:(()=>{${code}})()}); } catch(e) { return JSON.stringify({ok:false,error:e.message}); } })()`;
     const raw = await context.eval(wrapped, { timeout: 10000 });
     context.release();
     return JSON.parse(String(raw));
