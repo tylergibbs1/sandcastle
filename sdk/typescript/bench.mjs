@@ -63,7 +63,7 @@ async function execute(code, input, usePool = false) {
     // Use var for input to allow redeclaration in reused contexts
     const inputSetup = input !== undefined ? "var input = __input.copy();" : "";
     const wrapped = `${inputSetup}(()=>{try{return JSON.stringify({ok:true,value:(()=>{${code}})()})}catch(e){return JSON.stringify({ok:false,error:e.message})}})()`;
-    const raw = await context.eval(wrapped, { timeout: 10000 });
+    const raw = context.evalSync(wrapped, { timeout: 10000 });
     return JSON.parse(String(raw));
   } finally {
     if (entry && usePool) {
