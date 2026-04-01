@@ -54,9 +54,9 @@ async function execute(code, input, usePool = false) {
       copy.release();
     }
 
-    // Single eval: console stub + input copy + user code (saves 1-2 eval round-trips)
+    // Minimal wrapper: skip console stub (unused in benchmark)
     const inputSetup = input !== undefined ? "const input = __input.copy();" : "";
-    const wrapped = `const console={log(){},warn(){},error(){},debug(){}};${inputSetup}(() => { try { return JSON.stringify({ok:true,value:(()=>{${code}})()}); } catch(e) { return JSON.stringify({ok:false,error:e.message}); } })()`;
+    const wrapped = `${inputSetup}(()=>{try{return JSON.stringify({ok:true,value:(()=>{${code}})()})}catch(e){return JSON.stringify({ok:false,error:e.message})}})()`;
     const raw = await context.eval(wrapped, { timeout: 10000 });
     context.release();
     return JSON.parse(String(raw));
