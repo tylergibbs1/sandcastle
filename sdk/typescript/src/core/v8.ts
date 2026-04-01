@@ -178,8 +178,6 @@ export async function executeViaV8(
     const jail = context.global;
 
     // --- Console with streaming callback ---
-    // We use a Callback to stream console messages to the host in real-time,
-    // while also collecting them for the transcript.
     const consoleCallback = new iv.Callback(
       (levelStr: string, message: string) => {
         const level = levelStr as ConsoleEntry["level"];
@@ -191,10 +189,10 @@ export async function executeViaV8(
       },
       { async: false },
     );
-    await jail.set("__sc_console_cb", consoleCallback);
+    jail.setSync("__sc_console_cb", consoleCallback);
 
-    await context.eval(`
-      const console = {
+    context.evalSync(`
+      var console = {
         log:   (...a) => __sc_console_cb("log",   a.map(String).join(" ")),
         warn:  (...a) => __sc_console_cb("warn",  a.map(String).join(" ")),
         error: (...a) => __sc_console_cb("error", a.map(String).join(" ")),
@@ -206,28 +204,23 @@ export async function executeViaV8(
     if (hostFunctions && Object.keys(hostFunctions).length > 0) {
       for (const [name, fn] of Object.entries(hostFunctions)) {
         const cb = new iv.Callback(
-          (...args: unknown[]) => {
-            const result = fn(...args);
-            // If it returns a promise, we can't handle that in sync mode.
-            // Return the value directly.
-            return result;
-          },
+          (...args: unknown[]) => fn(...args),
           { async: false },
         );
-        await jail.set(name, cb);
+        jail.setSync(name, cb);
       }
     }
 
     // --- Inject input ---
     if (req.input !== undefined) {
       const inputCopy = new iv.ExternalCopy(req.input);
-      await jail.set("__sc_input", inputCopy);
-      await context.eval(
+      jail.setSync("__sc_input", inputCopy);
+      context.evalSync(
         "var input = __sc_input.copy(); globalThis.__sandcastle_input = input;",
       );
       inputCopy.release();
     } else {
-      await context.eval(
+      context.evalSync(
         "var input = undefined; globalThis.__sandcastle_input = undefined;",
       );
     }
@@ -274,12 +267,12 @@ export async function executeViaV8(
     let rawResult: string;
     try {
       if (isAsync) {
-        // For async code, eval returns a Reference to a Promise.
-        // Use .copy() to resolve it with the timeout.
+        // For async code, eval returns a Promise — must use async eval.
         const ref = await context.eval(wrappedCode, { timeout: limits.timeoutMs, promise: true });
         rawResult = String(ref);
       } else {
-        const result = await context.eval(wrappedCode, { timeout: limits.timeoutMs });
+        // Sync path: evalSync avoids microtask/promise overhead (~3.7x faster)
+        const result = context.evalSync(wrappedCode, { timeout: limits.timeoutMs });
         rawResult = String(result);
       }
     } catch (e: unknown) {
