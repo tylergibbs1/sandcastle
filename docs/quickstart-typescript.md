@@ -1,47 +1,57 @@
 # TypeScript Quick Start
 
-This is the fastest path for most developers.
-
 ## Install
 
 ```bash
-npm install @grayhaven/sandcastle
-```
+# Bun (zero dependencies)
+bun add @grayhaven/sandcastle
 
-The package will try to download the `sandcastle` CLI automatically on macOS and Linux.
+# Node.js
+npm install @grayhaven/sandcastle isolated-vm
+```
 
 ## Run your first sandbox
 
 ```ts
-import { SandCastle } from "@grayhaven/sandcastle";
+import { evaluate, run } from "@grayhaven/sandcastle";
 
-const sc = new SandCastle();
-const result = await sc.run<number>("return 1 + 1;");
-
-console.log(result); // 2
+await evaluate("1 + 1");                    // 2
+await evaluate("x * y", { x: 6, y: 7 });    // 42
+await run("return input.name", { name: "Alice" }); // "Alice"
 ```
 
-## Pass input
+No constructor, no config, no binary download. It works immediately.
+
+## More control
 
 ```ts
-const greeting = await sc.run<string>(
-  'return "Hello " + input.name;',
-  { name: "World" },
-);
+import { SandCastle } from "@grayhaven/sandcastle";
 
-console.log(greeting); // Hello World
+const sc = SandCastle.strict(); // tight limits for untrusted code
+
+// Reusable sandboxed functions
+const double = sc.wrap<number, [number]>("return args[0] * 2");
+await double(21); // 42
+
+// Persistent sessions
+const session = await sc.session();
+await session.run("var x = 1");
+await session.eval("x + 1"); // 2
+session.dispose();
+
+// Parallel execution
+await sc.batch(["return 1", "return 2", "return 3"]); // [1, 2, 3]
 ```
 
-## Verify the CLI wrapper
+## How it works
 
-```bash
-npx sandcastle --help
-```
+- **On Bun:** runs code in Worker threads (JavaScriptCore). Zero npm dependencies.
+- **On Node.js:** runs code in V8 isolates via `isolated-vm`.
+- Both provide isolated execution contexts with timeout and memory enforcement.
+- The SDK auto-detects your runtime and picks the right backend.
 
-If that fails, see [Troubleshooting](troubleshooting.md).
+## Next steps
 
-## Mental model
-
-- The TypeScript SDK is the primary interface.
-- Under the hood, it talks to the `sandcastle` CLI by default.
-- You can switch to HTTP mode later if you want a long-running server.
+- [Full API reference](../README.md#api)
+- [Using with AI agents](../README.md#using-with-ai-agents)
+- [Code Mode](../README.md#code-mode)

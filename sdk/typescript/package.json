@@ -1,7 +1,7 @@
 {
   "name": "@grayhaven/sandcastle",
   "version": "0.1.9",
-  "description": "TypeScript SDK for the SandCastle sandbox runtime",
+  "description": "The fastest way to run untrusted JavaScript safely. Zero-config, Bun-first.",
   "license": "(MIT OR Apache-2.0)",
   "type": "module",
   "exports": {
@@ -64,10 +64,14 @@
   },
   "keywords": [
     "sandbox",
-    "wasm",
+    "v8",
+    "isolate",
+    "bun",
     "ai",
     "agent",
     "code-execution",
-    "sandcastle"
+    "sandcastle",
+    "eval",
+    "secure"
   ]
 }

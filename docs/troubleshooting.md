@@ -1,69 +1,66 @@
 # Troubleshooting
 
-## `BinaryNotFoundError`
+## Bun: "Worker not found" or similar
 
-This means the TypeScript SDK could not find a working `sandcastle` CLI binary.
-
-Try this first:
+Make sure you're on Bun 1.0+. SandCastle uses Bun's built-in Worker API.
 
 ```bash
-npx sandcastle --help
+bun --version  # should be 1.0+
 ```
 
-If that still fails:
+## Node.js: "isolated-vm is required"
+
+The Node.js backend requires `isolated-vm`:
 
 ```bash
+npm install isolated-vm
+```
+
+If installation fails (C++ compilation error), make sure you have build tools:
+
+```bash
+# macOS
+xcode-select --install
+
+# Ubuntu/Debian
+sudo apt-get install python3 make g++
+```
+
+If you can't get it to compile, use Bun instead (zero dependencies).
+
+## Timeout errors on simple code
+
+Default timeout is 10 seconds. Increase if needed:
+
+```ts
+const sc = new SandCastle({
+  defaults: { timeoutMs: 30_000 },
+});
+```
+
+## Memory errors
+
+Default memory limit is 128MB. Increase if needed:
+
+```ts
+const sc = new SandCastle({
+  defaults: { memoryMb: 512 },
+});
+```
+
+## Subprocess mode: binary not found
+
+Subprocess mode (`mode: "subprocess"`) requires the `sandcastle` CLI binary. This is **not needed for the default mode** — only if you explicitly opt in.
+
+```bash
+# Build from source
 cargo install --path crates/sandcastle-cli
 ```
 
-Or download a release from:
+## HTTP mode: connection refused
 
-`https://github.com/tylergibbs1/sandcastle/releases`
-
-## Automatic binary download did not happen
-
-Common reasons:
-
-- Your platform does not have a prebuilt binary.
-- The install ran offline.
-- `postinstall` was disabled or skipped.
-
-Current automatic download support:
-
-- macOS
-- Linux
-
-## Unsupported platform
-
-Today the automatic binary path is focused on macOS and Linux. On other platforms, install from source with Rust.
-
-## Verify your setup
-
-Check the wrapper:
+Make sure the server is running:
 
 ```bash
-npx sandcastle --help
-```
-
-Check the native runtime once it is installed:
-
-```bash
-sandcastle doctor
-```
-
-Check the SDK:
-
-```ts
-import { SandCastle } from "@grayhaven/sandcastle";
-
-const sc = new SandCastle();
-await sc.run("return 1 + 1;");
-```
-
-Get an explicit diagnosis:
-
-```ts
-import { diagnoseInstallation } from "@grayhaven/sandcastle";
-
-console.log(await diagnoseInstallation());
+npx sandcastle serve --http 0.0.0.0:8080
 ```
