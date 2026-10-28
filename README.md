@@ -6,6 +6,8 @@
 
 <p align="center">The fastest way to run untrusted JavaScript safely.</p>
 
+<p align="center"><a href="https://www.npmjs.com/package/@grayhaven/sandcastle"><img src="https://img.shields.io/npm/v/@grayhaven/sandcastle" alt="npm" /></a></p>
+
 SandCastle is a JavaScript sandbox that just works. Install it, run code, get results. No binaries to download, no Docker, no configuration. It auto-detects your runtime (Bun or Node.js) and picks the fastest isolation backend.
 
 ```
@@ -13,7 +15,7 @@ Bun:     66,000 ops/sec  (zero dependencies)
 Node.js: 380,000 ops/sec (via isolated-vm)
 ```
 
-## Quick Start
+## Quick start
 
 ```bash
 # Bun (zero dependencies)
@@ -94,7 +96,91 @@ And the performance is identical — we benchmarked both doing the same work:
 
 **Zero overhead.** SandCastle gives you `eval()`, `wrap()`, `session()`, `batch()`, `test()`, presets, middleware, globals injection, streaming console, typed errors, and execution transcripts — at the same speed as hand-rolling it yourself. Plus it works on Bun with zero dependencies.
 
-## API
+## How it works
+
+SandCastle auto-detects your runtime and picks the best backend:
+
+| Runtime | Backend | Dependencies | Performance |
+|---------|---------|-------------|-------------|
+| **Bun** | Native Worker threads (JSC) | None | 66,000 ops/sec |
+| **Node.js** | V8 isolates (isolated-vm) | `isolated-vm` | 380,000 ops/sec |
+
+**On Bun:** Each execution runs in a separate Worker thread with its own JavaScriptCore context. Zero npm dependencies — just `bun add @grayhaven/sandcastle` and go.
+
+**On Node.js:** Uses [isolated-vm](https://github.com/laverdet/isolated-vm) for in-process V8 isolates with context reuse and `evalSync` for minimal overhead.
+
+Both backends provide:
+- Separate JS context per execution (no shared globals)
+- Timeout enforcement
+- Memory limits
+- Console capture
+- Structured error reporting
+
+### Pooling
+
+Enable isolate/worker pooling for maximum throughput:
+
+```ts
+const sc = new SandCastle({ pool: { maxIsolates: 8 } });
+```
+
+This reuses warm isolates/workers across calls instead of creating new ones, which is where the 66K-380K ops/sec numbers come from.
+
+## Using with AI agents
+
+SandCastle is designed for AI agent code execution:
+
+```ts
+const sandbox = new SandCastle();
+
+const tool = {
+  name: "run_code",
+  description: "Execute JavaScript in a secure sandbox",
+  execute: async ({ code, input }) => {
+    const result = await sandbox.execute({ code, input });
+    if (result.ok) return result.value;
+    return `Error: ${result.status.message}`;
+  },
+};
+```
+
+### Code Mode
+
+Replace N sequential tool calls with 1 code execution — up to 80% token reduction:
+
+```ts
+import { createCodeTool, TwoPassExecutor } from "@grayhaven/sandcastle/codemode";
+
+const tools = [
+  {
+    name: "getUser",
+    description: "Get user by ID",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+    execute: async ({ id }) => db.getUser(id),
+  },
+  {
+    name: "sendEmail",
+    description: "Send an email",
+    inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } }, required: ["to", "body"] },
+    execute: async (input) => mailer.send(input),
+  },
+];
+
+const codemode = createCodeTool({ tools, executor: new TwoPassExecutor() });
+// Give `codemode` to your LLM as a single tool
+```
+
+## Security model
+
+Guest code runs in an isolated context with no access to the host:
+- **No filesystem** — no `fs`, no `require('fs')`
+- **No network** — no `fetch`, no sockets (unless you expose them via host functions)
+- **No process access** — no `process.exit`, no `child_process`
+- **Timeout enforcement** — infinite loops are killed
+- **Memory limits** — configurable per-sandbox caps
+- **Host functions are opt-in** — the sandbox can only call what you explicitly expose
+
+## API reference
 
 ### `evaluate(expression, globals?)` — eval an expression
 
@@ -316,80 +402,6 @@ await sc.execute({
 });
 ```
 
-## How it works
-
-SandCastle auto-detects your runtime and picks the best backend:
-
-| Runtime | Backend | Dependencies | Performance |
-|---------|---------|-------------|-------------|
-| **Bun** | Native Worker threads (JSC) | None | 66,000 ops/sec |
-| **Node.js** | V8 isolates (isolated-vm) | `isolated-vm` | 380,000 ops/sec |
-
-**On Bun:** Each execution runs in a separate Worker thread with its own JavaScriptCore context. Zero npm dependencies — just `bun add @grayhaven/sandcastle` and go.
-
-**On Node.js:** Uses [isolated-vm](https://github.com/nickelpackers/isolated-vm) for in-process V8 isolates with context reuse and `evalSync` for minimal overhead.
-
-Both backends provide:
-- Separate JS context per execution (no shared globals)
-- Timeout enforcement
-- Memory limits
-- Console capture
-- Structured error reporting
-
-### Pooling
-
-Enable isolate/worker pooling for maximum throughput:
-
-```ts
-const sc = new SandCastle({ pool: { maxIsolates: 8 } });
-```
-
-This reuses warm isolates/workers across calls instead of creating new ones, which is where the 66K-380K ops/sec numbers come from.
-
-## Using with AI Agents
-
-SandCastle is designed for AI agent code execution:
-
-```ts
-const sandbox = new SandCastle();
-
-const tool = {
-  name: "run_code",
-  description: "Execute JavaScript in a secure sandbox",
-  execute: async ({ code, input }) => {
-    const result = await sandbox.execute({ code, input });
-    if (result.ok) return result.value;
-    return `Error: ${result.status.message}`;
-  },
-};
-```
-
-### Code Mode
-
-Replace N sequential tool calls with 1 code execution — up to 80% token reduction:
-
-```ts
-import { createCodeTool, TwoPassExecutor } from "@grayhaven/sandcastle/codemode";
-
-const tools = [
-  {
-    name: "getUser",
-    description: "Get user by ID",
-    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
-    execute: async ({ id }) => db.getUser(id),
-  },
-  {
-    name: "sendEmail",
-    description: "Send an email",
-    inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } }, required: ["to", "body"] },
-    execute: async (input) => mailer.send(input),
-  },
-];
-
-const codemode = createCodeTool({ tools, executor: new TwoPassExecutor() });
-// Give `codemode` to your LLM as a single tool
-```
-
 ## Deployment
 
 ### Bun / Node.js (default)
@@ -404,28 +416,6 @@ export async function POST(req: Request) {
   const { code, input } = await req.json();
   return Response.json(await run(code, input));
 }
-```
-
-### HTTP server mode
-
-For microservices or multi-language backends:
-
-```bash
-npx sandcastle serve --http 0.0.0.0:8080
-
-curl -X POST http://localhost:8080/execute \
-  -H 'Content-Type: application/json' \
-  -d '{"code": "return input.x * 2", "input": {"x": 21}}'
-```
-
-```ts
-const sc = new SandCastle({ httpEndpoint: "http://localhost:8080" });
-```
-
-### Docker
-
-```bash
-docker compose up -d
 ```
 
 ### Vercel / serverless
@@ -443,16 +433,27 @@ Works out of the box on Node.js 18+. On Bun-based serverless, zero dependencies.
 | E2B | API key | ~100ms | Firecracker VM | Network |
 | `eval()` | Built-in | ~0.01ms | **None** | None |
 
-## Security Model
+## Documentation
 
-Guest code runs in an isolated context with no access to the host:
-- **No filesystem** — no `fs`, no `require('fs')`
-- **No network** — no `fetch`, no sockets (unless you expose them via host functions)
-- **No process access** — no `process.exit`, no `child_process`
-- **Timeout enforcement** — infinite loops are killed
-- **Memory limits** — configurable per-sandbox caps
-- **Host functions are opt-in** — the sandbox can only call what you explicitly expose
+- [TypeScript quick start](docs/quickstart-typescript.md)
+- [Architecture](docs/architecture.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Experiments](EXPERIMENTS.md)
+
+## Development
+
+The SDK lives in [`sdk/typescript`](sdk/typescript/):
+
+```bash
+cd sdk/typescript
+bun install
+bun test
+bun run check   # biome + tsc
+bun run build
+```
+
+Pushing a `sdk-v*` tag publishes the SDK to npm via [`publish-sdk.yml`](.github/workflows/publish-sdk.yml).
 
 ## License
 
-Apache 2.0
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option.
